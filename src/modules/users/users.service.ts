@@ -8,7 +8,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { User, UserRole, UserStatus } from '../../entities/user.entity';
 
 export class CreateUserDto {
-  @ApiProperty() @IsString() employeeCode: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() employeeCode?: string;
   @ApiProperty() @IsString() fullName: string;
   @ApiProperty() @IsEmail() email: string;
   @ApiProperty() @IsString() @MinLength(6) password: string;
@@ -56,12 +56,28 @@ export class UsersService {
     return this.sanitize(user);
   }
 
+  private async generateEmployeeCode(): Promise<string> {
+    const last = await this.repo
+      .createQueryBuilder('u')
+      .select('u.employeeCode', 'code')
+      .where("u.employeeCode LIKE 'NV%'")
+      .orderBy('u.employeeCode', 'DESC')
+      .limit(1)
+      .getRawOne();
+    const nextNum = last ? (parseInt(last.code.replace('NV', ''), 10) || 0) + 1 : 1;
+    return `NV${String(nextNum).padStart(3, '0')}`;
+  }
+
   async create(dto: CreateUserDto) {
-    const exists = await this.repo.findOne({ where: [{ email: dto.email }, { employeeCode: dto.employeeCode }] });
-    if (exists) throw new ConflictException('Email hoặc mã NV đã tồn tại');
+    const emailExists = await this.repo.findOne({ where: { email: dto.email } });
+    if (emailExists) throw new ConflictException('Email đã tồn tại');
+
+    const employeeCode = dto.employeeCode || await this.generateEmployeeCode();
+    const codeExists = await this.repo.findOne({ where: { employeeCode } });
+    if (codeExists) throw new ConflictException('Mã nhân viên đã tồn tại');
 
     const user = this.repo.create({
-      employeeCode: dto.employeeCode,
+      employeeCode,
       fullName: dto.fullName,
       email: dto.email,
       passwordHash: dto.password,
