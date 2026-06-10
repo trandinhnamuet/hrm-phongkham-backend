@@ -51,8 +51,19 @@ export class AttendanceService {
     @InjectRepository(Shift) private shiftRepo: Repository<Shift>,
   ) {}
 
+  private toVnDateStr(date: Date): string {
+    const vn = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+    return vn.toISOString().split('T')[0];
+  }
+
+  private vnMinutesFromMidnight(date: Date): number {
+    const vn = new Date(date.getTime() + 7 * 60 * 60 * 1000);
+    return vn.getUTCHours() * 60 + vn.getUTCMinutes();
+  }
+
   async checkIn(user: User, dto: CheckInDto) {
-    const today = new Date().toISOString().split('T')[0];
+    const now = new Date();
+    const today = this.toVnDateStr(now);
     const existing = await this.logRepo.findOne({ where: { userId: user.id, workDate: today } });
     if (existing?.checkInAt) throw new BadRequestException('Bạn đã chấm công vào hôm nay');
 
@@ -65,17 +76,13 @@ export class AttendanceService {
     }
 
     const shift = await this.getShiftForToday();
-    const now = new Date();
     let lateMinutes = 0;
 
     if (shift) {
       const [h, m] = shift.startTime.split(':').map(Number);
-      const shiftStart = new Date(now);
-      shiftStart.setHours(h, m + shift.graceMinutes, 0, 0);
-      if (now > shiftStart) {
-        const diffMs = now.getTime() - shiftStart.getTime();
-        lateMinutes = Math.floor(diffMs / 60000);
-      }
+      const shiftStartMins = h * 60 + m + shift.graceMinutes;
+      const nowMins = this.vnMinutesFromMidnight(now);
+      lateMinutes = Math.max(0, nowMins - shiftStartMins);
     }
 
     if (existing) {
@@ -105,7 +112,7 @@ export class AttendanceService {
   }
 
   async checkOut(user: User, dto: CheckOutDto) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = this.toVnDateStr(new Date());
     const log = await this.logRepo.findOne({
       where: { userId: user.id, workDate: today },
       relations: { shift: true },
@@ -167,7 +174,7 @@ export class AttendanceService {
   }
 
   async getTodayStatus(userId: string) {
-    const today = new Date().toISOString().split('T')[0];
+    const today = this.toVnDateStr(new Date());
     return this.logRepo.findOne({
       where: { userId, workDate: today },
       relations: { shift: true },
