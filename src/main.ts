@@ -18,7 +18,7 @@ async function bootstrap() {
 
   const allowedOrigins = [
     'http://localhost:3000',
-    'https://hrm-phongkham-frontend-hbhv.vercel.app',
+    'https://hrm-nhakhoagiadinh.vercel.app',
     ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
   ];
   app.enableCors({
