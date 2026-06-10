@@ -1,14 +1,31 @@
 import {
-  Injectable, BadRequestException, NotFoundException, ForbiddenException,
+  Injectable, BadRequestException, NotFoundException, ForbiddenException, ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, IsNull } from 'typeorm';
-import { IsEnum, IsNumber, IsOptional, IsString, IsDateString } from 'class-validator';
+import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, IsDateString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { LeaveRequest, LeaveRequestStatus } from '../../entities/leave-request.entity';
 import { LeaveBalance } from '../../entities/leave-balance.entity';
 import { LeaveType } from '../../entities/leave-type.entity';
 import { User, UserRole } from '../../entities/user.entity';
+
+export class CreateLeaveTypeDto {
+  @ApiProperty() @IsString() name: string;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() maxDays?: number;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() deductsBalance?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() requiresDoc?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isPaid?: boolean;
+}
+
+export class UpdateLeaveTypeDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() maxDays?: number;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() deductsBalance?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() requiresDoc?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isPaid?: boolean;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isActive?: boolean;
+}
 
 export class CreateLeaveRequestDto {
   @ApiProperty() @IsNumber() leaveTypeId: number;
@@ -33,7 +50,41 @@ export class LeaveService {
   ) {}
 
   async getLeaveTypes() {
-    return this.typeRepo.find({ where: { isActive: true } });
+    return this.typeRepo.find({ order: { name: 'ASC' } });
+  }
+
+  private toCode(name: string): string {
+    return name
+      .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[đĐ]/g, 'd')
+      .toUpperCase().replace(/[^A-Z0-9]+/g, '_').replace(/^_|_$/g, '');
+  }
+
+  async createLeaveType(dto: CreateLeaveTypeDto) {
+    const base = this.toCode(dto.name);
+    let code = base; let n = 2;
+    while (await this.typeRepo.findOne({ where: { code } })) code = `${base}_${n++}`;
+    if (await this.typeRepo.findOne({ where: { name: dto.name } }))
+      throw new ConflictException('Tên loại nghỉ đã tồn tại');
+    return this.typeRepo.save(this.typeRepo.create({
+      ...dto, code,
+      deductsBalance: dto.deductsBalance ?? true,
+      requiresDoc: dto.requiresDoc ?? false,
+      isPaid: dto.isPaid ?? true,
+    }));
+  }
+
+  async updateLeaveType(id: number, dto: UpdateLeaveTypeDto) {
+    const lt = await this.typeRepo.findOne({ where: { id } });
+    if (!lt) throw new NotFoundException('Không tìm thấy loại nghỉ');
+    Object.assign(lt, dto);
+    return this.typeRepo.save(lt);
+  }
+
+  async deleteLeaveType(id: number) {
+    const lt = await this.typeRepo.findOne({ where: { id } });
+    if (!lt) throw new NotFoundException('Không tìm thấy loại nghỉ');
+    await this.typeRepo.update(id, { isActive: false });
+    return { message: 'Đã xóa loại nghỉ' };
   }
 
   async getMyBalance(userId: string) {

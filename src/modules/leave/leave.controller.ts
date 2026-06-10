@@ -1,9 +1,9 @@
 import {
-  Controller, Get, Post, Patch, Body, Param, Query,
+  Controller, Get, Post, Patch, Delete, Body, Param, Query,
   UseGuards, ParseIntPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
-import { LeaveService, CreateLeaveRequestDto, ReviewLeaveDto } from './leave.service';
+import { LeaveService, CreateLeaveRequestDto, ReviewLeaveDto, CreateLeaveTypeDto, UpdateLeaveTypeDto } from './leave.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -21,6 +21,27 @@ export class LeaveController {
   @Get('types')
   getTypes() {
     return this.leaveService.getLeaveTypes();
+  }
+
+  @Post('types')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.GIAM_DOC)
+  createType(@Body() dto: CreateLeaveTypeDto) {
+    return this.leaveService.createLeaveType(dto);
+  }
+
+  @Patch('types/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.GIAM_DOC)
+  updateType(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateLeaveTypeDto) {
+    return this.leaveService.updateLeaveType(id, dto);
+  }
+
+  @Delete('types/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.GIAM_DOC)
+  deleteType(@Param('id', ParseIntPipe) id: number) {
+    return this.leaveService.deleteLeaveType(id);
   }
 
   @Get('balance/my')
