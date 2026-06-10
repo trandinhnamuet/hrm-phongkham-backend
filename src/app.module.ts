@@ -5,6 +5,7 @@ import { User } from './entities/user.entity';
 import { Department } from './entities/department.entity';
 import { ClinicSettings } from './entities/clinic-settings.entity';
 import { Task } from './entities/task.entity';
+import { TaskHistory } from './entities/task-history.entity';
 import { TaskComment } from './entities/task-comment.entity';
 import { TaskAttachment } from './entities/task-attachment.entity';
 import { Shift } from './entities/shift.entity';
@@ -34,7 +35,7 @@ import { LeaveModule } from './modules/leave/leave.module';
         database: config.get('DB_NAME'),
         entities: [
           User, Department, ClinicSettings,
-          Task, TaskComment, TaskAttachment,
+          Task, TaskHistory, TaskComment, TaskAttachment,
           Shift, AttendanceLog, AttendanceAdjustment,
           LeaveType, LeaveBalance, LeaveRequest,
         ],

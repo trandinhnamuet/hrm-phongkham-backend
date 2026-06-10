@@ -37,6 +37,11 @@ export class TasksController {
     return this.tasksService.findOne(id, user);
   }
 
+  @Get(':id/history')
+  getHistory(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
+    return this.tasksService.getHistory(id, user);
+  }
+
   @Post()
   create(@Body() dto: CreateTaskDto, @CurrentUser() user: User) {
     return this.tasksService.create(dto, user);
