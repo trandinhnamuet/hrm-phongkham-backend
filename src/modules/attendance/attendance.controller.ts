@@ -58,6 +58,7 @@ export class AttendanceController {
   @ApiQuery({ name: 'month', required: false })
   @ApiQuery({ name: 'userId', required: false })
   getAllLogs(
+    @CurrentUser() user: User,
     @Query('year') year?: string,
     @Query('month') month?: string,
     @Query('userId') userId?: string,
@@ -67,6 +68,7 @@ export class AttendanceController {
       year ? +year : now.getFullYear(),
       month ? +month : now.getMonth() + 1,
       userId,
+      user,
     );
   }
 

@@ -53,19 +53,21 @@ export class TasksService {
 
   /* ── helpers ── */
 
-  private async getManagerDeptIds(managerId: string): Promise<number[]> {
+  private async resolveManagerDeptIds(managerId: string): Promise<number[]> {
     const mgr = await this.userRepo.findOne({
       where: { id: managerId },
       relations: { managedDepartments: true },
     });
-    return (mgr?.managedDepartments ?? []).map(d => Number(d.id));
+    const explicit = (mgr?.managedDepartments ?? []).map(d => Number(d.id));
+    if (explicit.length > 0) return explicit;
+    return mgr?.departmentId ? [Number(mgr.departmentId)] : [];
   }
 
   private async checkReadAccess(task: Task, user: User): Promise<void> {
     if (user.role === UserRole.GIAM_DOC) return;
     if (user.role === UserRole.QUAN_LY) {
-      if (task.createdById === user.id) return;
-      const deptIds = await this.getManagerDeptIds(user.id);
+      if (task.createdById === user.id || task.assigneeId === user.id) return;
+      const deptIds = await this.resolveManagerDeptIds(user.id);
       if (deptIds.length > 0 && task.assigneeId) {
         const assignee = await this.userRepo.findOne({ where: { id: task.assigneeId } });
         if (assignee && deptIds.includes(Number(assignee.departmentId))) return;
@@ -80,8 +82,8 @@ export class TasksService {
   private async checkWriteAccess(task: Task, user: User): Promise<void> {
     if (user.role === UserRole.GIAM_DOC) return;
     if (user.role === UserRole.QUAN_LY) {
-      if (task.createdById === user.id) return;
-      const deptIds = await this.getManagerDeptIds(user.id);
+      if (task.createdById === user.id || task.assigneeId === user.id) return;
+      const deptIds = await this.resolveManagerDeptIds(user.id);
       if (deptIds.length > 0 && task.assigneeId) {
         const assignee = await this.userRepo.findOne({ where: { id: task.assigneeId } });
         if (assignee && deptIds.includes(Number(assignee.departmentId))) return;
@@ -115,13 +117,12 @@ export class TasksService {
     if (user.role === UserRole.NHAN_VIEN) {
       qb.andWhere('(t.created_by = :uid OR t.assignee_id = :uid)', { uid: user.id });
     } else if (user.role === UserRole.QUAN_LY) {
-      const deptIds = await this.getManagerDeptIds(user.id);
+      const deptIds = await this.resolveManagerDeptIds(user.id);
       if (deptIds.length > 0) {
-        qb.leftJoin('assignee.department', 'assignee_dept')
-          .andWhere(
-            '(assignee_dept.id IN (:...deptIds) OR t.created_by = :uid)',
-            { deptIds, uid: user.id },
-          );
+        qb.andWhere(
+          `(t.assignee_id IN (SELECT u.id FROM "HRM"."users" u WHERE u.department_id IN (:...deptIds)) OR t.created_by = :uid OR t.assignee_id = :uid)`,
+          { deptIds, uid: user.id },
+        );
       } else {
         qb.andWhere('(t.created_by = :uid OR t.assignee_id = :uid)', { uid: user.id });
       }
@@ -154,12 +155,10 @@ export class TasksService {
       throw new ForbiddenException('Nhân viên chỉ được tạo task cho bản thân');
     }
     if (user.role === UserRole.QUAN_LY && dto.assigneeId && dto.assigneeId !== user.id) {
-      const deptIds = await this.getManagerDeptIds(user.id);
-      if (deptIds.length > 0) {
-        const assignee = await this.userRepo.findOne({ where: { id: dto.assigneeId } });
-        if (!assignee || !deptIds.includes(Number(assignee.departmentId))) {
-          throw new ForbiddenException('Quản lý chỉ có thể giao việc cho nhân viên trong bộ phận của mình');
-        }
+      const deptIds = await this.resolveManagerDeptIds(user.id);
+      const assignee = await this.userRepo.findOne({ where: { id: dto.assigneeId } });
+      if (!assignee || !deptIds.includes(Number(assignee.departmentId))) {
+        throw new ForbiddenException('Quản lý chỉ có thể giao việc cho nhân viên trong bộ phận của mình');
       }
     }
 
@@ -196,12 +195,10 @@ export class TasksService {
     }
 
     if (user.role === UserRole.QUAN_LY && dto.assigneeId && dto.assigneeId !== task.assigneeId) {
-      const deptIds = await this.getManagerDeptIds(user.id);
-      if (deptIds.length > 0) {
-        const newAssignee = await this.userRepo.findOne({ where: { id: dto.assigneeId } });
-        if (!newAssignee || !deptIds.includes(Number(newAssignee.departmentId))) {
-          throw new ForbiddenException('Quản lý chỉ có thể giao việc cho nhân viên trong bộ phận của mình');
-        }
+      const deptIds = await this.resolveManagerDeptIds(user.id);
+      const newAssignee = await this.userRepo.findOne({ where: { id: dto.assigneeId } });
+      if (!newAssignee || !deptIds.includes(Number(newAssignee.departmentId))) {
+        throw new ForbiddenException('Quản lý chỉ có thể giao việc cho nhân viên trong bộ phận của mình');
       }
     }
 

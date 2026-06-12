@@ -49,7 +49,18 @@ export class AttendanceService {
     @InjectRepository(AttendanceAdjustment) private adjRepo: Repository<AttendanceAdjustment>,
     @InjectRepository(ClinicSettings) private settingsRepo: Repository<ClinicSettings>,
     @InjectRepository(Shift) private shiftRepo: Repository<Shift>,
+    @InjectRepository(User) private userRepo: Repository<User>,
   ) {}
+
+  private async resolveManagerDeptIds(managerId: string): Promise<number[]> {
+    const mgr = await this.userRepo.findOne({
+      where: { id: managerId },
+      relations: { managedDepartments: true },
+    });
+    const explicit = (mgr?.managedDepartments ?? []).map(d => Number(d.id));
+    if (explicit.length > 0) return explicit;
+    return mgr?.departmentId ? [Number(mgr.departmentId)] : [];
+  }
 
   private toVnDateStr(date: Date): string {
     const vn = new Date(date.getTime() + 7 * 60 * 60 * 1000);
@@ -160,7 +171,7 @@ export class AttendanceService {
       .getMany();
   }
 
-  async getAllLogs(year: number, month: number, userId?: string) {
+  async getAllLogs(year: number, month: number, userId?: string, requestUser?: User) {
     const start = `${year}-${String(month).padStart(2, '0')}-01`;
     const end = new Date(year, month, 0).toISOString().split('T')[0];
     const qb = this.logRepo
@@ -170,6 +181,17 @@ export class AttendanceService {
       .where('l.workDate BETWEEN :start AND :end', { start, end })
       .orderBy('l.workDate', 'DESC');
     if (userId) qb.andWhere('l.userId = :uid', { uid: userId });
+    if (requestUser?.role === UserRole.QUAN_LY) {
+      const deptIds = await this.resolveManagerDeptIds(requestUser.id);
+      if (deptIds.length > 0) {
+        qb.andWhere(
+          `l.user_id IN (SELECT u.id FROM "HRM"."users" u WHERE u.department_id IN (:...deptIds))`,
+          { deptIds },
+        );
+      } else {
+        qb.andWhere('l.user_id = :managerId', { managerId: requestUser.id });
+      }
+    }
     return qb.getMany();
   }
 
