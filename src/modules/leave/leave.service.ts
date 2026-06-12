@@ -50,7 +50,7 @@ export class LeaveService {
   ) {}
 
   async getLeaveTypes() {
-    return this.typeRepo.find({ order: { name: 'ASC' } });
+    return this.typeRepo.find({ where: { isActive: true }, order: { name: 'ASC' } });
   }
 
   private toCode(name: string): string {
@@ -83,7 +83,12 @@ export class LeaveService {
   async deleteLeaveType(id: number) {
     const lt = await this.typeRepo.findOne({ where: { id } });
     if (!lt) throw new NotFoundException('Không tìm thấy loại nghỉ');
-    await this.typeRepo.update(id, { isActive: false });
+    const inUse = await this.requestRepo.count({ where: { leaveTypeId: id } });
+    if (inUse > 0) {
+      await this.typeRepo.update(id, { isActive: false });
+    } else {
+      await this.typeRepo.remove(lt);
+    }
     return { message: 'Đã xóa loại nghỉ' };
   }
 
