@@ -1,7 +1,7 @@
 import {
   Entity, PrimaryGeneratedColumn, Column, CreateDateColumn,
-  UpdateDateColumn, OneToMany, BeforeInsert, BeforeUpdate,
-  ManyToOne, JoinColumn,
+  UpdateDateColumn, BeforeInsert, BeforeUpdate,
+  ManyToOne, JoinColumn, ManyToMany, JoinTable,
 } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { Department } from './department.entity';
@@ -25,7 +25,7 @@ export class User {
   @Column({ unique: true, name: 'employee_code', length: 20 })
   employeeCode: string;
 
-  @Column({ length: 150 })
+  @Column({ name: 'full_name', length: 150 })
   fullName: string;
 
   @Column({ unique: true, length: 255 })
@@ -61,6 +61,15 @@ export class User {
 
   @Column({ name: 'last_login_at', nullable: true, type: 'timestamptz' })
   lastLoginAt: Date;
+
+  @ManyToMany(() => Department, { eager: false, cascade: false })
+  @JoinTable({
+    name: 'manager_departments',
+    schema: 'HRM',
+    joinColumn: { name: 'manager_id', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'department_id', referencedColumnName: 'id' },
+  })
+  managedDepartments: Department[];
 
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;

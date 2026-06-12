@@ -44,14 +44,58 @@ export class CreateAttachmentDto {
 @Injectable()
 export class TasksService {
   constructor(
-    @InjectRepository(Task) private taskRepo: Repository<Task>,
-    @InjectRepository(TaskHistory) private historyRepo: Repository<TaskHistory>,
-    @InjectRepository(TaskComment) private commentRepo: Repository<TaskComment>,
-    @InjectRepository(TaskAttachment) private attachRepo: Repository<TaskAttachment>,
+    @InjectRepository(Task)           private taskRepo:    Repository<Task>,
+    @InjectRepository(TaskHistory)    private historyRepo: Repository<TaskHistory>,
+    @InjectRepository(TaskComment)    private commentRepo: Repository<TaskComment>,
+    @InjectRepository(TaskAttachment) private attachRepo:  Repository<TaskAttachment>,
+    @InjectRepository(User)           private userRepo:    Repository<User>,
   ) {}
 
+  /* ── helpers ── */
+
+  private async getManagerDeptIds(managerId: string): Promise<number[]> {
+    const mgr = await this.userRepo.findOne({
+      where: { id: managerId },
+      relations: { managedDepartments: true },
+    });
+    return (mgr?.managedDepartments ?? []).map(d => Number(d.id));
+  }
+
+  private async checkReadAccess(task: Task, user: User): Promise<void> {
+    if (user.role === UserRole.GIAM_DOC) return;
+    if (user.role === UserRole.QUAN_LY) {
+      if (task.createdById === user.id) return;
+      const deptIds = await this.getManagerDeptIds(user.id);
+      if (deptIds.length > 0 && task.assigneeId) {
+        const assignee = await this.userRepo.findOne({ where: { id: task.assigneeId } });
+        if (assignee && deptIds.includes(Number(assignee.departmentId))) return;
+      }
+      throw new ForbiddenException('Không có quyền xem công việc này');
+    }
+    if (task.createdById !== user.id && task.assigneeId !== user.id) {
+      throw new ForbiddenException('Không có quyền xem công việc này');
+    }
+  }
+
+  private async checkWriteAccess(task: Task, user: User): Promise<void> {
+    if (user.role === UserRole.GIAM_DOC) return;
+    if (user.role === UserRole.QUAN_LY) {
+      if (task.createdById === user.id) return;
+      const deptIds = await this.getManagerDeptIds(user.id);
+      if (deptIds.length > 0 && task.assigneeId) {
+        const assignee = await this.userRepo.findOne({ where: { id: task.assigneeId } });
+        if (assignee && deptIds.includes(Number(assignee.departmentId))) return;
+      }
+      throw new ForbiddenException('Không có quyền chỉnh sửa công việc này');
+    }
+    if (task.createdById !== user.id && task.assigneeId !== user.id) {
+      throw new ForbiddenException('Không có quyền chỉnh sửa công việc này');
+    }
+  }
+
+  /* ── CRUD ── */
+
   async findAll(user: User, filters: { status?: TaskStatus; assigneeId?: string; priority?: TaskPriority }) {
-    // Lazy overdue detection: mark any TODO/IN_PROGRESS past due_date as QUA_HAN
     await this.taskRepo
       .createQueryBuilder()
       .update(Task)
@@ -70,10 +114,22 @@ export class TasksService {
 
     if (user.role === UserRole.NHAN_VIEN) {
       qb.andWhere('(t.created_by = :uid OR t.assignee_id = :uid)', { uid: user.id });
+    } else if (user.role === UserRole.QUAN_LY) {
+      const deptIds = await this.getManagerDeptIds(user.id);
+      if (deptIds.length > 0) {
+        qb.leftJoin('assignee.department', 'assignee_dept')
+          .andWhere(
+            '(assignee_dept.id IN (:...deptIds) OR t.created_by = :uid)',
+            { deptIds, uid: user.id },
+          );
+      } else {
+        qb.andWhere('(t.created_by = :uid OR t.assignee_id = :uid)', { uid: user.id });
+      }
     }
-    if (filters.status) qb.andWhere('t.status = :s', { s: filters.status });
+
+    if (filters.status)     qb.andWhere('t.status = :s',      { s: filters.status });
     if (filters.assigneeId) qb.andWhere('t.assignee_id = :a', { a: filters.assigneeId });
-    if (filters.priority) qb.andWhere('t.priority = :p', { p: filters.priority });
+    if (filters.priority)   qb.andWhere('t.priority = :p',    { p: filters.priority });
 
     return qb.getMany();
   }
@@ -89,7 +145,7 @@ export class TasksService {
       },
     });
     if (!task) throw new NotFoundException('Không tìm thấy công việc');
-    this.checkReadAccess(task, user);
+    await this.checkReadAccess(task, user);
     return task;
   }
 
@@ -97,6 +153,16 @@ export class TasksService {
     if (user.role === UserRole.NHAN_VIEN && dto.assigneeId && dto.assigneeId !== user.id) {
       throw new ForbiddenException('Nhân viên chỉ được tạo task cho bản thân');
     }
+    if (user.role === UserRole.QUAN_LY && dto.assigneeId && dto.assigneeId !== user.id) {
+      const deptIds = await this.getManagerDeptIds(user.id);
+      if (deptIds.length > 0) {
+        const assignee = await this.userRepo.findOne({ where: { id: dto.assigneeId } });
+        if (!assignee || !deptIds.includes(Number(assignee.departmentId))) {
+          throw new ForbiddenException('Quản lý chỉ có thể giao việc cho nhân viên trong bộ phận của mình');
+        }
+      }
+    }
+
     const task = await this.taskRepo.save(this.taskRepo.create({
       title: dto.title,
       description: dto.description,
@@ -118,9 +184,8 @@ export class TasksService {
   async update(id: number, dto: UpdateTaskDto, user: User) {
     const task = await this.taskRepo.findOne({ where: { id, deletedAt: IsNull() as any } });
     if (!task) throw new NotFoundException('Không tìm thấy công việc');
-    this.checkWriteAccess(task, user);
+    await this.checkWriteAccess(task, user);
 
-    // QUA_HAN tasks can only move to DONE
     if (
       task.status === TaskStatus.QUA_HAN &&
       dto.status &&
@@ -130,8 +195,17 @@ export class TasksService {
       throw new BadRequestException('Công việc quá hạn chỉ có thể chuyển sang Hoàn thành');
     }
 
-    const entries: Array<{ fieldName: string; oldValue: string; newValue: string }> = [];
+    if (user.role === UserRole.QUAN_LY && dto.assigneeId && dto.assigneeId !== task.assigneeId) {
+      const deptIds = await this.getManagerDeptIds(user.id);
+      if (deptIds.length > 0) {
+        const newAssignee = await this.userRepo.findOne({ where: { id: dto.assigneeId } });
+        if (!newAssignee || !deptIds.includes(Number(newAssignee.departmentId))) {
+          throw new ForbiddenException('Quản lý chỉ có thể giao việc cho nhân viên trong bộ phận của mình');
+        }
+      }
+    }
 
+    const entries: Array<{ fieldName: string; oldValue: string; newValue: string }> = [];
     const track = (field: string, oldVal: any, newVal: any) => {
       const o = String(oldVal ?? '');
       const n = String(newVal ?? '');
@@ -144,22 +218,10 @@ export class TasksService {
       if (dto.status === TaskStatus.DONE) task.completedAt = new Date();
       else task.completedAt = null as any;
     }
-    if (dto.title !== undefined && dto.title !== task.title) {
-      track('title', task.title, dto.title);
-      task.title = dto.title;
-    }
-    if (dto.description !== undefined && dto.description !== task.description) {
-      track('description', task.description, dto.description);
-      task.description = dto.description;
-    }
-    if (dto.assigneeId !== undefined && dto.assigneeId !== task.assigneeId) {
-      track('assigneeId', task.assigneeId, dto.assigneeId);
-      task.assigneeId = dto.assigneeId;
-    }
-    if (dto.priority !== undefined && dto.priority !== task.priority) {
-      track('priority', task.priority, dto.priority);
-      task.priority = dto.priority;
-    }
+    if (dto.title       !== undefined && dto.title       !== task.title)       { track('title', task.title, dto.title);             task.title       = dto.title; }
+    if (dto.description !== undefined && dto.description !== task.description) { track('description', task.description, dto.description); task.description = dto.description; }
+    if (dto.assigneeId  !== undefined && dto.assigneeId  !== task.assigneeId)  { track('assigneeId', task.assigneeId, dto.assigneeId); task.assigneeId  = dto.assigneeId; }
+    if (dto.priority    !== undefined && dto.priority    !== task.priority)     { track('priority', task.priority, dto.priority);     task.priority    = dto.priority; }
     if (dto.dueDate !== undefined) {
       const oldDate = task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : '';
       if (oldDate !== dto.dueDate) {
@@ -171,15 +233,14 @@ export class TasksService {
     await this.taskRepo.save(task);
 
     if (entries.length > 0) {
-      const records = entries.map(e => this.historyRepo.create({
+      await this.historyRepo.save(entries.map(e => this.historyRepo.create({
         taskId: id,
         changedById: user.id,
         changeType: e.fieldName === 'status' ? 'STATUS_CHANGE' : 'FIELD_UPDATE',
         fieldName: e.fieldName,
         oldValue: e.oldValue,
         newValue: e.newValue,
-      }));
-      await this.historyRepo.save(records);
+      })));
     }
 
     return task;
@@ -188,7 +249,7 @@ export class TasksService {
   async getHistory(taskId: number, user: User) {
     const task = await this.taskRepo.findOne({ where: { id: taskId, deletedAt: IsNull() as any } });
     if (!task) throw new NotFoundException('Không tìm thấy công việc');
-    this.checkReadAccess(task, user);
+    await this.checkReadAccess(task, user);
     return this.historyRepo.find({
       where: { taskId },
       relations: { changedBy: true },
@@ -200,9 +261,7 @@ export class TasksService {
   async remove(id: number, user: User) {
     const task = await this.taskRepo.findOne({ where: { id, deletedAt: IsNull() as any } });
     if (!task) throw new NotFoundException('Không tìm thấy công việc');
-    if (user.role === UserRole.NHAN_VIEN && task.createdById !== user.id) {
-      throw new ForbiddenException('Không có quyền xóa công việc này');
-    }
+    await this.checkWriteAccess(task, user);
     task.deletedAt = new Date();
     await this.taskRepo.save(task);
     return { message: 'Đã xóa công việc' };
@@ -211,9 +270,8 @@ export class TasksService {
   async addComment(taskId: number, dto: CreateCommentDto, user: User) {
     const task = await this.taskRepo.findOne({ where: { id: taskId, deletedAt: IsNull() as any } });
     if (!task) throw new NotFoundException('Không tìm thấy công việc');
-    this.checkReadAccess(task, user);
-    const comment = this.commentRepo.create({ taskId, userId: user.id, body: dto.body });
-    return this.commentRepo.save(comment);
+    await this.checkReadAccess(task, user);
+    return this.commentRepo.save(this.commentRepo.create({ taskId, userId: user.id, body: dto.body }));
   }
 
   async deleteComment(commentId: number, user: User) {
@@ -230,9 +288,8 @@ export class TasksService {
   async addAttachment(taskId: number, dto: CreateAttachmentDto, user: User) {
     const task = await this.taskRepo.findOne({ where: { id: taskId, deletedAt: IsNull() as any } });
     if (!task) throw new NotFoundException('Không tìm thấy công việc');
-    this.checkReadAccess(task, user);
-    const att = this.attachRepo.create({ taskId, uploadedById: user.id, ...dto });
-    return this.attachRepo.save(att);
+    await this.checkReadAccess(task, user);
+    return this.attachRepo.save(this.attachRepo.create({ taskId, uploadedById: user.id, ...dto }));
   }
 
   async deleteAttachment(attachId: number, user: User) {
@@ -243,20 +300,5 @@ export class TasksService {
     }
     await this.attachRepo.remove(att);
     return { message: 'Đã xóa tệp đính kèm' };
-  }
-
-  private checkReadAccess(task: Task, user: User) {
-    if (user.role !== UserRole.NHAN_VIEN) return;
-    if (task.createdById !== user.id && task.assigneeId !== user.id) {
-      throw new ForbiddenException('Không có quyền xem công việc này');
-    }
-  }
-
-  private checkWriteAccess(task: Task, user: User) {
-    if (user.role === UserRole.GIAM_DOC) return;
-    if (user.role === UserRole.QUAN_LY) return;
-    if (task.createdById !== user.id && task.assigneeId !== user.id) {
-      throw new ForbiddenException('Không có quyền chỉnh sửa công việc này');
-    }
   }
 }

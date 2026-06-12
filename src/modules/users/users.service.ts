@@ -1,11 +1,12 @@
 import {
-  Injectable, NotFoundException, ConflictException, ForbiddenException,
+  Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { IsEmail, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { User, UserRole, UserStatus } from '../../entities/user.entity';
+import { Department } from '../../entities/department.entity';
 
 export class CreateUserDto {
   @ApiPropertyOptional() @IsOptional() @IsString() employeeCode?: string;
@@ -27,6 +28,7 @@ export class UpdateUserDto {
   @ApiPropertyOptional() @IsOptional() @IsEnum(UserStatus) status?: UserStatus;
   @ApiPropertyOptional() @IsOptional() @IsString() avatarUrl?: string;
   @ApiPropertyOptional() @IsOptional() departmentId?: number | null;
+  @ApiPropertyOptional() @IsOptional() managedDepartmentIds?: number[];
 }
 
 export class ChangePasswordDto {
@@ -35,25 +37,53 @@ export class ChangePasswordDto {
 
 @Injectable()
 export class UsersService {
-  constructor(@InjectRepository(User) private repo: Repository<User>) {}
+  constructor(
+    @InjectRepository(User)       private repo:     Repository<User>,
+    @InjectRepository(Department) private deptRepo: Repository<Department>,
+  ) {}
 
   async findAll(role?: UserRole, status?: UserStatus) {
     const qb = this.repo.createQueryBuilder('u')
       .leftJoinAndSelect('u.department', 'dept')
+      .leftJoinAndSelect('u.managedDepartments', 'managedDepts')
       .orderBy('u.fullName', 'ASC');
-    if (role) qb.andWhere('u.role = :role', { role });
+    if (role)   qb.andWhere('u.role = :role',     { role });
     if (status) qb.andWhere('u.status = :status', { status });
-    const users = await qb.getMany();
-    return users.map(this.sanitize);
+    return (await qb.getMany()).map(this.sanitize);
   }
 
   async findOne(id: string) {
     const user = await this.repo.findOne({
       where: { id },
-      relations: { department: true },
+      relations: { department: true, managedDepartments: true },
     });
     if (!user) throw new NotFoundException('Không tìm thấy nhân viên');
     return this.sanitize(user);
+  }
+
+  async getManagedDepartments(userId: string) {
+    const user = await this.repo.findOne({
+      where: { id: userId },
+      relations: { managedDepartments: true },
+    });
+    if (!user) throw new NotFoundException('Không tìm thấy nhân viên');
+    return user.managedDepartments ?? [];
+  }
+
+  async setManagedDepartments(userId: string, deptIds: number[]) {
+    const user = await this.repo.findOne({
+      where: { id: userId },
+      relations: { managedDepartments: true },
+    });
+    if (!user) throw new NotFoundException('Không tìm thấy nhân viên');
+    if (user.role !== UserRole.QUAN_LY) {
+      throw new BadRequestException('Chỉ có thể gắn bộ phận cho tài khoản có vai trò Quản lý');
+    }
+    user.managedDepartments = deptIds.length > 0
+      ? await this.deptRepo.findBy({ id: In(deptIds) })
+      : [];
+    await this.repo.save(user);
+    return user.managedDepartments;
   }
 
   private async generateEmployeeCode(): Promise<string> {
@@ -87,16 +117,28 @@ export class UsersService {
       joinDate: dto.joinDate ? new Date(dto.joinDate) : undefined,
       departmentId: dto.departmentId || undefined,
     });
-    const saved = await this.repo.save(user);
-    return this.sanitize(saved);
+    return this.sanitize(await this.repo.save(user));
   }
 
   async update(id: string, dto: UpdateUserDto) {
-    const user = await this.repo.findOne({ where: { id } });
+    const user = await this.repo.findOne({
+      where: { id },
+      relations: { managedDepartments: true },
+    });
     if (!user) throw new NotFoundException('Không tìm thấy nhân viên');
-    Object.assign(user, dto);
-    const saved = await this.repo.save(user);
-    return this.sanitize(saved);
+
+    const { managedDepartmentIds, ...rest } = dto;
+    Object.assign(user, rest);
+
+    if (managedDepartmentIds !== undefined) {
+      if (user.role === UserRole.QUAN_LY || dto.role === UserRole.QUAN_LY) {
+        user.managedDepartments = managedDepartmentIds.length > 0
+          ? await this.deptRepo.findBy({ id: In(managedDepartmentIds) })
+          : [];
+      }
+    }
+
+    return this.sanitize(await this.repo.save(user));
   }
 
   async changePassword(id: string, newPassword: string, requesterId: string, requesterRole: UserRole) {

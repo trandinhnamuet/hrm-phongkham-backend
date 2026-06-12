@@ -1,5 +1,5 @@
 import {
-  Controller, Get, Post, Patch, Body, Param, Query, UseGuards,
+  Controller, Get, Post, Patch, Put, Body, Param, Query, UseGuards, ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { UsersService, CreateUserDto, UpdateUserDto, ChangePasswordDto } from './users.service';
@@ -20,19 +20,34 @@ export class UsersController {
   @Roles(UserRole.GIAM_DOC, UserRole.QUAN_LY)
   @ApiQuery({ name: 'role', required: false, enum: UserRole })
   @ApiQuery({ name: 'status', required: false, enum: UserStatus })
-  findAll(
-    @Query('role') role?: UserRole,
-    @Query('status') status?: UserStatus,
-  ) {
+  findAll(@Query('role') role?: UserRole, @Query('status') status?: UserStatus) {
     return this.usersService.findAll(role, status);
   }
 
   @Get(':id')
   findOne(@Param('id') id: string, @CurrentUser() me: User) {
     if (me.role === UserRole.NHAN_VIEN && me.id !== id) {
-      return { message: 'Không có quyền' };
+      throw new ForbiddenException('Không có quyền');
     }
     return this.usersService.findOne(id);
+  }
+
+  @Get(':id/managed-departments')
+  @Roles(UserRole.GIAM_DOC, UserRole.QUAN_LY)
+  getManagedDepartments(@Param('id') id: string, @CurrentUser() me: User) {
+    if (me.role === UserRole.QUAN_LY && me.id !== id) {
+      throw new ForbiddenException('Chỉ có thể xem bộ phận của chính mình');
+    }
+    return this.usersService.getManagedDepartments(id);
+  }
+
+  @Put(':id/managed-departments')
+  @Roles(UserRole.GIAM_DOC)
+  setManagedDepartments(
+    @Param('id') id: string,
+    @Body() body: { departmentIds: number[] },
+  ) {
+    return this.usersService.setManagedDepartments(id, body.departmentIds ?? []);
   }
 
   @Post()
@@ -42,23 +57,15 @@ export class UsersController {
   }
 
   @Patch(':id')
-  update(
-    @Param('id') id: string,
-    @Body() dto: UpdateUserDto,
-    @CurrentUser() me: User,
-  ) {
+  update(@Param('id') id: string, @Body() dto: UpdateUserDto, @CurrentUser() me: User) {
     if (me.role === UserRole.NHAN_VIEN && me.id !== id) {
-      return { message: 'Không có quyền' };
+      throw new ForbiddenException('Không có quyền');
     }
     return this.usersService.update(id, dto);
   }
 
   @Patch(':id/password')
-  changePassword(
-    @Param('id') id: string,
-    @Body() dto: ChangePasswordDto,
-    @CurrentUser() me: User,
-  ) {
+  changePassword(@Param('id') id: string, @Body() dto: ChangePasswordDto, @CurrentUser() me: User) {
     return this.usersService.changePassword(id, dto.newPassword, me.id, me.role);
   }
 }
