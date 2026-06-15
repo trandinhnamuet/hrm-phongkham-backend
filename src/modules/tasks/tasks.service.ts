@@ -101,7 +101,7 @@ export class TasksService {
     await this.taskRepo
       .createQueryBuilder()
       .update(Task)
-      .set({ status: TaskStatus.QUA_HAN })
+      .set({ status: TaskStatus.QUA_HAN, statusChangedAt: () => 'now()' })
       .where('status IN (:...statuses)', { statuses: [TaskStatus.TODO, TaskStatus.IN_PROGRESS] })
       .andWhere('due_date < CURRENT_DATE')
       .andWhere('deleted_at IS NULL')
@@ -112,7 +112,8 @@ export class TasksService {
       .leftJoinAndSelect('t.createdBy', 'creator')
       .leftJoinAndSelect('t.assignee', 'assignee')
       .where('t.deleted_at IS NULL')
-      .orderBy('t.created_at', 'DESC');
+      // Sắp theo thời điểm đổi trạng thái gần nhất (mới nhất lên đầu)
+      .orderBy('COALESCE(t.status_changed_at, t.created_at)', 'DESC');
 
     if (user.role === UserRole.NHAN_VIEN) {
       qb.andWhere('(t.created_by = :uid OR t.assignee_id = :uid)', { uid: user.id });
@@ -169,6 +170,7 @@ export class TasksService {
       assigneeId: dto.assigneeId || user.id,
       priority: dto.priority || TaskPriority.NORMAL,
       dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
+      statusChangedAt: new Date(),
     }));
 
     await this.historyRepo.save(this.historyRepo.create({
@@ -212,6 +214,7 @@ export class TasksService {
     if (dto.status !== undefined && dto.status !== task.status) {
       track('status', task.status, dto.status);
       task.status = dto.status;
+      task.statusChangedAt = new Date();
       if (dto.status === TaskStatus.DONE) task.completedAt = new Date();
       else task.completedAt = null as any;
     }

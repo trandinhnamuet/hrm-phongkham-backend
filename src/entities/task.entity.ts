@@ -58,6 +58,9 @@ export class Task {
   @Column({ name: 'completed_at', nullable: true, type: 'timestamptz' })
   completedAt: Date;
 
+  @Column({ name: 'status_changed_at', nullable: true, type: 'timestamptz' })
+  statusChangedAt: Date;
+
   @OneToMany(() => TaskComment, (c) => c.task)
   comments: TaskComment[];
 
