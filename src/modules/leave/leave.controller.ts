@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Patch, Delete, Body, Param, Query,
-  UseGuards, ParseIntPipe,
+  UseGuards, ParseIntPipe, ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { LeaveService, CreateLeaveRequestDto, ReviewLeaveDto, CreateLeaveTypeDto, UpdateLeaveTypeDto } from './leave.service';
@@ -53,7 +53,7 @@ export class LeaveController {
   @UseGuards(RolesGuard)
   @Roles(UserRole.GIAM_DOC, UserRole.QUAN_LY)
   getBalance(
-    @Param('userId') userId: string,
+    @Param('userId', ParseUUIDPipe) userId: string,
     @Query('year') year?: string,
     @Query('month') month?: string,
   ) {

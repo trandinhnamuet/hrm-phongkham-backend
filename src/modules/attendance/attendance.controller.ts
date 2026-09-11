@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Patch, Body, Param, Query,
-  UseGuards, ParseIntPipe,
+  UseGuards, ParseIntPipe, ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import {
@@ -40,14 +40,14 @@ export class AttendanceController {
   @ApiQuery({ name: 'month', required: false })
   getMyLogs(
     @CurrentUser() user: User,
-    @Query('year') year?: string,
-    @Query('month') month?: string,
+    @Query('year', new ParseIntPipe({ optional: true })) year?: number,
+    @Query('month', new ParseIntPipe({ optional: true })) month?: number,
   ) {
     const now = new Date();
     return this.attendanceService.getMyLogs(
       user.id,
-      year ? +year : now.getFullYear(),
-      month ? +month : now.getMonth() + 1,
+      year ?? now.getFullYear(),
+      month ?? now.getMonth() + 1,
     );
   }
 
@@ -59,14 +59,14 @@ export class AttendanceController {
   @ApiQuery({ name: 'userId', required: false })
   getAllLogs(
     @CurrentUser() user: User,
-    @Query('year') year?: string,
-    @Query('month') month?: string,
-    @Query('userId') userId?: string,
+    @Query('year', new ParseIntPipe({ optional: true })) year?: number,
+    @Query('month', new ParseIntPipe({ optional: true })) month?: number,
+    @Query('userId', new ParseUUIDPipe({ optional: true })) userId?: string,
   ) {
     const now = new Date();
     return this.attendanceService.getAllLogs(
-      year ? +year : now.getFullYear(),
-      month ? +month : now.getMonth() + 1,
+      year ?? now.getFullYear(),
+      month ?? now.getMonth() + 1,
       userId,
       user,
     );

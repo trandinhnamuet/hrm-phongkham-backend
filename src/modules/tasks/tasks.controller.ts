@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Patch, Delete, Body, Param, Query,
-  UseGuards, ParseIntPipe,
+  UseGuards, ParseIntPipe, ParseEnumPipe, ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import {
@@ -25,9 +25,15 @@ export class TasksController {
   @ApiQuery({ name: 'assigneeId', required: false })
   findAll(
     @CurrentUser() user: User,
-    @Query('status') status?: TaskStatus,
-    @Query('priority') priority?: TaskPriority,
-    @Query('assigneeId') assigneeId?: string,
+    // optional: true -> khong truyen thi bo qua, truyen sai thi 400 (truoc day la 500).
+    // Dung pipe tung param thay vi DTO ca cum, vi global ValidationPipe co
+    // forbidNonWhitelisted: true se chan ca query param la khong lien quan.
+    @Query('status', new ParseEnumPipe(TaskStatus, { optional: true }))
+    status?: TaskStatus,
+    @Query('priority', new ParseEnumPipe(TaskPriority, { optional: true }))
+    priority?: TaskPriority,
+    @Query('assigneeId', new ParseUUIDPipe({ optional: true }))
+    assigneeId?: string,
   ) {
     return this.tasksService.findAll(user, { status, priority, assigneeId });
   }

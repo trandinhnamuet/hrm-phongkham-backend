@@ -3,7 +3,7 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource, IsNull } from 'typeorm';
-import { IsBoolean, IsEnum, IsNumber, IsOptional, IsString, IsDateString } from 'class-validator';
+import { IsBoolean, IsEnum, IsIn, IsNumber, IsOptional, IsString, IsDateString } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { LeaveRequest, LeaveRequestStatus } from '../../entities/leave-request.entity';
 import { LeaveBalance } from '../../entities/leave-balance.entity';
@@ -36,7 +36,7 @@ export class CreateLeaveRequestDto {
 }
 
 export class ReviewLeaveDto {
-  @ApiProperty({ enum: ['APPROVED', 'REJECTED'] }) @IsEnum(['APPROVED', 'REJECTED']) status: 'APPROVED' | 'REJECTED';
+  @ApiProperty({ enum: ['APPROVED', 'REJECTED'] }) @IsIn(['APPROVED', 'REJECTED']) status: 'APPROVED' | 'REJECTED';
   @ApiPropertyOptional() @IsOptional() @IsString() reviewNote?: string;
 }
 
@@ -60,11 +60,18 @@ export class LeaveService {
   }
 
   async createLeaveType(dto: CreateLeaveTypeDto) {
+    // deleteLeaveType() la soft-delete (isActive=false) nhung name/code unique o DB.
+    // Neu chi bao trung ten thi ten da xoa bi khoa vinh vien. Gap ban ghi da xoa
+    // thi kich hoat lai thay vi nem 409.
+    const nameExists = await this.typeRepo.findOne({ where: { name: dto.name } });
+    if (nameExists) {
+      if (nameExists.isActive) throw new ConflictException('Tên loại nghỉ đã tồn tại');
+      Object.assign(nameExists, dto, { isActive: true });
+      return this.typeRepo.save(nameExists);
+    }
     const base = this.toCode(dto.name);
     let code = base; let n = 2;
     while (await this.typeRepo.findOne({ where: { code } })) code = `${base}_${n++}`;
-    if (await this.typeRepo.findOne({ where: { name: dto.name } }))
-      throw new ConflictException('Tên loại nghỉ đã tồn tại');
     return this.typeRepo.save(this.typeRepo.create({
       ...dto, code,
       deductsBalance: dto.deductsBalance ?? true,

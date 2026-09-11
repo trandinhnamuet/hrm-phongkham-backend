@@ -4,8 +4,9 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
-  IsEnum, IsNumber, IsOptional, IsString, Min, Max,
+  IsEnum, IsIn, IsNumber, IsOptional, IsString, Min, Max,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AttendanceLog, AttendanceStatus } from '../../entities/attendance-log.entity';
 import { AttendanceAdjustment, AdjustmentField, AdjustmentStatus } from '../../entities/attendance-adjustment.entity';
@@ -22,14 +23,14 @@ export class CheckInDto {
 export class CheckOutDto extends CheckInDto {}
 
 export class CreateAdjustmentDto {
-  @ApiProperty() logId: number;
+  @ApiProperty() @Type(() => Number) @IsNumber() logId: number;
   @ApiProperty({ enum: AdjustmentField }) @IsEnum(AdjustmentField) field: AdjustmentField;
   @ApiProperty() @IsString() requestedValue: string;
   @ApiProperty() @IsString() reason: string;
 }
 
 export class ReviewAdjustmentDto {
-  @ApiProperty({ enum: ['APPROVED', 'REJECTED'] }) @IsEnum(['APPROVED', 'REJECTED']) status: 'APPROVED' | 'REJECTED';
+  @ApiProperty({ enum: ['APPROVED', 'REJECTED'] }) @IsIn(['APPROVED', 'REJECTED']) status: 'APPROVED' | 'REJECTED';
   @ApiPropertyOptional() @IsOptional() @IsString() reviewNote?: string;
 }
 
@@ -159,9 +160,21 @@ export class AttendanceService {
     return this.logRepo.save(log);
   }
 
+  // year/month den tu query. Neu khong chan bien thi
+  // new Date(year, month, 0).toISOString() nem RangeError -> 500 Internal server error.
+  private monthRange(year: number, month: number) {
+    if (!Number.isInteger(year) || year < 2000 || year > 2100
+      || !Number.isInteger(month) || month < 1 || month > 12) {
+      throw new BadRequestException('year phải trong 2000-2100 và month trong 1-12');
+    }
+    return {
+      start: `${year}-${String(month).padStart(2, '0')}-01`,
+      end: new Date(year, month, 0).toISOString().split('T')[0],
+    };
+  }
+
   async getMyLogs(userId: string, year: number, month: number) {
-    const start = `${year}-${String(month).padStart(2, '0')}-01`;
-    const end = new Date(year, month, 0).toISOString().split('T')[0];
+    const { start, end } = this.monthRange(year, month);
     return this.logRepo
       .createQueryBuilder('l')
       .leftJoinAndSelect('l.shift', 'shift')
@@ -172,8 +185,7 @@ export class AttendanceService {
   }
 
   async getAllLogs(year: number, month: number, userId?: string, requestUser?: User) {
-    const start = `${year}-${String(month).padStart(2, '0')}-01`;
-    const end = new Date(year, month, 0).toISOString().split('T')[0];
+    const { start, end } = this.monthRange(year, month);
     const qb = this.logRepo
       .createQueryBuilder('l')
       .leftJoinAndSelect('l.user', 'user')

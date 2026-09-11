@@ -3,10 +3,17 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { IsEmail, IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsArray, IsEmail, IsEnum, IsInt, IsOptional, IsString, MinLength } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { User, UserRole, UserStatus } from '../../entities/user.entity';
 import { Department } from '../../entities/department.entity';
+
+export class SetManagedDepartmentsDto {
+  @ApiPropertyOptional({ type: [Number] })
+  @IsOptional() @IsArray() @IsInt({ each: true }) @Type(() => Number)
+  departmentIds?: number[];
+}
 
 export class CreateUserDto {
   @ApiPropertyOptional() @IsOptional() @IsString() employeeCode?: string;
