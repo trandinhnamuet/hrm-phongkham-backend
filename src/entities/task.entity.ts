@@ -1,6 +1,7 @@
 import {
   Entity, PrimaryGeneratedColumn, Column, CreateDateColumn,
   UpdateDateColumn, ManyToOne, OneToMany, JoinColumn,
+  ManyToMany, JoinTable,
 } from 'typeorm';
 import { User } from './user.entity';
 import { TaskComment } from './task-comment.entity';
@@ -39,12 +40,18 @@ export class Task {
   @JoinColumn({ name: 'created_by' })
   createdBy: User;
 
-  @Column({ name: 'assignee_id', nullable: true, type: 'uuid' })
-  assigneeId: string;
-
-  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
-  @JoinColumn({ name: 'assignee_id' })
-  assignee: User;
+  /**
+   * Một công việc có thể giao cho nhiều người.
+   * Thay cho cột assignee_id cũ (xem migration TaskMultipleAssignees).
+   */
+  @ManyToMany(() => User, { eager: false, cascade: false })
+  @JoinTable({
+    name: 'task_assignees',
+    schema: 'HRM',
+    joinColumn: { name: 'task_id', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'user_id', referencedColumnName: 'id' },
+  })
+  assignees: User[];
 
   @Column({ type: 'enum', enum: TaskPriority, default: TaskPriority.NORMAL })
   priority: TaskPriority;
