@@ -5,7 +5,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
-  IsBoolean, IsEnum, IsIn, IsNumber, IsOptional, IsString, Min, Max,
+  IsBoolean, IsDateString, IsEnum, IsIn, IsNumber, IsOptional, IsString, Min, Max,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -42,6 +42,15 @@ export class CreateShiftDto {
   @ApiProperty() @IsString() endTime: string;
   @ApiPropertyOptional() @IsOptional() @IsNumber() breakMinutes?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() graceMinutes?: number;
+}
+
+export class UpdateLogDto {
+  /** Giờ vào dạng ISO. null nghĩa là xoá giờ vào. */
+  @ApiPropertyOptional() @IsOptional() @IsDateString() checkInAt?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsDateString() checkOutAt?: string | null;
+  @ApiPropertyOptional({ enum: AttendanceStatus })
+  @IsOptional() @IsEnum(AttendanceStatus) status?: AttendanceStatus;
+  @ApiPropertyOptional() @IsOptional() @IsString() note?: string;
 }
 
 export class UpdateShiftDto {
@@ -216,6 +225,65 @@ export class AttendanceService {
       }
     }
     return qb.getMany();
+  }
+
+  /**
+   * Giám đốc sửa thẳng một bản ghi chấm công.
+   *
+   * Đi muộn và số phút làm được tính lại từ giờ mới, không giữ giá trị cũ —
+   * nếu không, sửa giờ vào xong mà cột "đi muộn" vẫn là số của giờ cũ thì bảng
+   * công mâu thuẫn với chính nó.
+   */
+  async updateLog(id: number, dto: UpdateLogDto) {
+    const log = await this.logRepo.findOne({ where: { id }, relations: { shift: true } });
+    if (!log) throw new NotFoundException('Không tìm thấy bản ghi chấm công');
+
+    if (dto.checkInAt !== undefined) log.checkInAt = dto.checkInAt ? new Date(dto.checkInAt) : (null as any);
+    if (dto.checkOutAt !== undefined) log.checkOutAt = dto.checkOutAt ? new Date(dto.checkOutAt) : (null as any);
+    if (dto.note !== undefined) log.note = dto.note;
+
+    if (log.checkInAt && log.checkOutAt && log.checkOutAt <= log.checkInAt) {
+      throw new BadRequestException('Giờ ra phải sau giờ vào');
+    }
+
+    // Tính lại đi muộn theo ca của ngày đó
+    if (log.checkInAt && log.shift) {
+      const [h, m] = log.shift.startTime.split(':').map(Number);
+      const startMins = h * 60 + m + (log.shift.graceMinutes || 0);
+      log.lateMinutes = Math.max(0, this.vnMinutesFromMidnight(log.checkInAt) - startMins);
+    } else if (!log.checkInAt) {
+      log.lateMinutes = 0;
+    }
+
+    // Tính lại số phút làm
+    if (log.checkInAt && log.checkOutAt) {
+      const breakMs = (log.shift?.breakMinutes || 0) * 60000;
+      const ms = log.checkOutAt.getTime() - log.checkInAt.getTime() - breakMs;
+      log.workedMinutes = Math.max(0, Math.floor(ms / 60000));
+    } else {
+      log.workedMinutes = 0;
+    }
+
+    // Trạng thái: ưu tiên giá trị người sửa chọn, không thì suy ra từ giờ.
+    if (dto.status !== undefined) {
+      log.status = dto.status;
+    } else if (log.checkInAt) {
+      log.status = log.lateMinutes > 0 ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
+    }
+
+    log.isAdjusted = true;
+    await this.logRepo.save(log);
+    return this.logRepo.findOne({ where: { id }, relations: { shift: true, user: true } });
+  }
+
+  async deleteLog(id: number) {
+    const log = await this.logRepo.findOne({ where: { id } });
+    if (!log) throw new NotFoundException('Không tìm thấy bản ghi chấm công');
+    // Xoá hẳn: các yêu cầu điều chỉnh trỏ tới bản ghi này cũng đi theo (FK CASCADE),
+    // giữ lại chúng thì thành yêu cầu mồ côi không mở được.
+    await this.adjRepo.delete({ logId: id });
+    await this.logRepo.remove(log);
+    return { message: 'Đã xóa bản ghi chấm công' };
   }
 
   async getTodayStatus(userId: string) {

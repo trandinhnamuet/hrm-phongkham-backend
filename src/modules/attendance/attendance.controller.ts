@@ -6,6 +6,7 @@ import { ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import {
   AttendanceService, CheckInDto, CheckOutDto,
   CreateAdjustmentDto, ReviewAdjustmentDto, CreateShiftDto, UpdateShiftDto,
+  UpdateLogDto,
 } from './attendance.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -135,5 +136,23 @@ export class AttendanceController {
   @Roles(UserRole.GIAM_DOC)
   updateSettings(@Body() data: any) {
     return this.attendanceService.updateSettings(data);
+  }
+
+  /* Hai route dưới dùng tham số một đoạn nên phải đứng SAU mọi đường dẫn cụ thể
+     như 'settings' hay 'shifts', nếu không ':id' sẽ nuốt luôn PATCH /settings
+     rồi ParseIntPipe trả 400. */
+
+  @Patch(':id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.GIAM_DOC)
+  updateLog(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateLogDto) {
+    return this.attendanceService.updateLog(id, dto);
+  }
+
+  @Delete(':id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.GIAM_DOC)
+  deleteLog(@Param('id', ParseIntPipe) id: number) {
+    return this.attendanceService.deleteLog(id);
   }
 }
