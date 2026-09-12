@@ -84,6 +84,36 @@ export class TasksService {
   /** Đường dẫn mở thẳng hộp chi tiết của một công việc trên frontend. */
   private taskLink(id: number | string) { return `/tasks?task=${id}`; }
 
+  /**
+   * Cấp trên của những người được giao: quản lý phụ trách bộ phận của họ.
+   * Chỉ lấy quản lý theo bộ phận, không báo cho toàn bộ Giám đốc — việc hoàn
+   * thành diễn ra liên tục, báo hết cho mọi người thì thành nhiễu.
+   */
+  private async resolveSupervisors(assignees: User[]): Promise<string[]> {
+    const deptIds = [...new Set(
+      assignees.map(a => Number(a.departmentId)).filter(d => Number.isFinite(d)),
+    )];
+    if (deptIds.length === 0) return [];
+
+    const explicit = await this.userRepo
+      .createQueryBuilder('u')
+      .innerJoin('u.managedDepartments', 'd')
+      .where('d.id IN (:...deptIds)', { deptIds })
+      .select(['u.id'])
+      .getMany();
+
+    // Quản lý chưa được gắn bộ phận riêng thì coi bộ phận của chính họ là phụ trách.
+    const implicit = await this.userRepo.find({
+      where: { role: UserRole.QUAN_LY },
+      select: { id: true, departmentId: true } as any,
+    });
+
+    return [...new Set([
+      ...explicit.map(u => u.id),
+      ...implicit.filter(u => deptIds.includes(Number(u.departmentId))).map(u => u.id),
+    ])];
+  }
+
   /* ── helpers ── */
 
   private async resolveManagerDeptIds(managerId: string): Promise<number[]> {
@@ -333,6 +363,7 @@ export class TasksService {
       if (added.length > 0) await this.assertCanAssign(user, added);
     }
 
+    let justCompleted = false;
     const entries: Array<{ fieldName: string; oldValue: string; newValue: string }> = [];
     const track = (field: string, oldVal: any, newVal: any) => {
       const o = String(oldVal ?? '');
@@ -345,6 +376,7 @@ export class TasksService {
       task.status = dto.status;
       task.statusChangedAt = new Date();
       if (dto.status === TaskStatus.DONE) {
+        justCompleted = true;
         task.completedAt = new Date();
         // Báo xong là chuyển sang chờ người giao việc đánh giá. Kể cả việc đã bị
         // trả lại rồi làm lại cũng quay về chờ đánh giá.
@@ -402,6 +434,19 @@ export class TasksService {
         type: NotificationType.TASK_ASSIGNED,
         title: `${user.fullName} giao việc cho bạn: ${task.title}`,
         body: task.description,
+        link: this.taskLink(task.id),
+      });
+    }
+
+    // Báo hoàn thành: người giao việc và quản lý bộ phận cần biết để đánh giá.
+    if (justCompleted) {
+      const supervisors = await this.resolveSupervisors(task.assignees ?? []);
+      await this.notifications.notify({
+        userIds: [task.createdById, ...supervisors],
+        actorId: user.id,
+        type: NotificationType.TASK_COMPLETED,
+        title: `${user.fullName} báo hoàn thành: ${task.title}`,
+        body: 'Công việc đang chờ bạn đánh giá.',
         link: this.taskLink(task.id),
       });
     }
