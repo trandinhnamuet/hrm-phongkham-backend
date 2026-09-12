@@ -1,11 +1,11 @@
 import {
-  Controller, Get, Post, Patch, Body, Param, Query,
+  Controller, Get, Post, Patch, Delete, Body, Param, Query,
   UseGuards, ParseIntPipe, ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import {
   AttendanceService, CheckInDto, CheckOutDto,
-  CreateAdjustmentDto, ReviewAdjustmentDto, CreateShiftDto,
+  CreateAdjustmentDto, ReviewAdjustmentDto, CreateShiftDto, UpdateShiftDto,
 } from './attendance.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
@@ -107,6 +107,20 @@ export class AttendanceController {
   @Roles(UserRole.GIAM_DOC)
   createShift(@Body() dto: CreateShiftDto) {
     return this.attendanceService.createShift(dto);
+  }
+
+  @Patch('shifts/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.GIAM_DOC)
+  updateShift(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateShiftDto) {
+    return this.attendanceService.updateShift(id, dto);
+  }
+
+  @Delete('shifts/:id')
+  @UseGuards(RolesGuard)
+  @Roles(UserRole.GIAM_DOC)
+  deleteShift(@Param('id', ParseIntPipe) id: number) {
+    return this.attendanceService.deleteShift(id);
   }
 
   @Get('settings')

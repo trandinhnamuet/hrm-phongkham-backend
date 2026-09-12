@@ -1,10 +1,11 @@
 import {
   Injectable, BadRequestException, NotFoundException, ForbiddenException,
+  ConflictException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
-  IsEnum, IsIn, IsNumber, IsOptional, IsString, Min, Max,
+  IsBoolean, IsEnum, IsIn, IsNumber, IsOptional, IsString, Min, Max,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
@@ -41,6 +42,16 @@ export class CreateShiftDto {
   @ApiProperty() @IsString() endTime: string;
   @ApiPropertyOptional() @IsOptional() @IsNumber() breakMinutes?: number;
   @ApiPropertyOptional() @IsOptional() @IsNumber() graceMinutes?: number;
+}
+
+export class UpdateShiftDto {
+  @ApiPropertyOptional() @IsOptional() @IsString() code?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() startTime?: string;
+  @ApiPropertyOptional() @IsOptional() @IsString() endTime?: string;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() breakMinutes?: number;
+  @ApiPropertyOptional() @IsOptional() @IsNumber() graceMinutes?: number;
+  @ApiPropertyOptional() @IsOptional() @IsBoolean() isActive?: boolean;
 }
 
 @Injectable()
@@ -273,8 +284,38 @@ export class AttendanceService {
   }
 
   async createShift(dto: CreateShiftDto) {
-    const shift = this.shiftRepo.create(dto);
-    return this.shiftRepo.save(shift);
+    // code unique o DB, ma deleteShift la soft-delete. Neu chi bao trung ma thi
+    // ma cua ca da xoa bi khoa vinh vien va nguoi dung khong con thay no de sua.
+    const existing = await this.shiftRepo.findOne({ where: { code: dto.code } });
+    if (existing) {
+      if (existing.isActive) throw new ConflictException('Mã ca đã tồn tại');
+      Object.assign(existing, dto, { isActive: true });
+      return this.shiftRepo.save(existing);
+    }
+    return this.shiftRepo.save(this.shiftRepo.create(dto));
+  }
+
+  async updateShift(id: number, dto: UpdateShiftDto) {
+    const shift = await this.shiftRepo.findOne({ where: { id } });
+    if (!shift) throw new NotFoundException('Không tìm thấy ca làm việc');
+
+    if (dto.code && dto.code !== shift.code) {
+      const dup = await this.shiftRepo.findOne({ where: { code: dto.code } });
+      if (dup) throw new ConflictException('Mã ca đã tồn tại');
+    }
+
+    Object.assign(shift, dto);
+    await this.shiftRepo.save(shift);
+    // Doc lai de tra ve day du field: save() chi tra ve cac cot vua doi.
+    return this.shiftRepo.findOne({ where: { id } });
+  }
+
+  async deleteShift(id: number) {
+    const shift = await this.shiftRepo.findOne({ where: { id } });
+    if (!shift) throw new NotFoundException('Không tìm thấy ca làm việc');
+    // Soft-delete: bang cham cong con tham chieu shift_id nen khong xoa han.
+    await this.shiftRepo.update(id, { isActive: false });
+    return { message: 'Đã xóa ca làm việc' };
   }
 
   async getSettings() {
