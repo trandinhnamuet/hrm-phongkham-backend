@@ -542,6 +542,9 @@ export class TasksService {
     await this.checkWriteAccess(task, user);
     task.deletedAt = new Date();
     await this.taskRepo.save(task);
+    // Thông báo cũ vẫn trỏ tới công việc này; để nguyên thì bấm vào chỉ nhận
+    // được 404, nên dọn luôn cho khỏi thành link chết.
+    await this.notifications.removeByLink(this.taskLink(id));
     return { message: 'Đã xóa công việc' };
   }
 

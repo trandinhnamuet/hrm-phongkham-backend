@@ -54,6 +54,16 @@ export class NotificationsService {
     });
   }
 
+  /**
+   * Xoá mọi thông báo trỏ tới một đường dẫn.
+   *
+   * Dùng khi thứ được nhắc tới không còn nữa: giữ lại thì người dùng bấm vào
+   * một thông báo dẫn đến trang trống, tưởng hệ thống hỏng.
+   */
+  async removeByLink(link: string) {
+    await this.repo.delete({ link });
+  }
+
   async unreadCount(userId: string) {
     const count = await this.repo.count({ where: { userId, isRead: false } });
     return { count };
