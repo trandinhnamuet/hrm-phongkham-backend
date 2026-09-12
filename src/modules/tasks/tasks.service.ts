@@ -4,10 +4,10 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, IsNull } from 'typeorm';
 import {
-  IsArray, IsEnum, IsOptional, IsString, IsUUID, IsDateString,
+  IsArray, IsEnum, IsIn, IsOptional, IsString, IsUUID, IsDateString,
 } from 'class-validator';
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
-import { Task, TaskPriority, TaskStatus } from '../../entities/task.entity';
+import { Task, TaskPriority, TaskStatus, TaskReviewStatus } from '../../entities/task.entity';
 import { TaskHistory } from '../../entities/task-history.entity';
 import { TaskComment } from '../../entities/task-comment.entity';
 import { TaskAttachment } from '../../entities/task-attachment.entity';
@@ -46,6 +46,15 @@ export class UpdateTaskDto {
   @ApiPropertyOptional() @IsOptional() @IsEnum(TaskPriority) priority?: TaskPriority;
   @ApiPropertyOptional() @IsOptional() @IsEnum(TaskStatus) status?: TaskStatus;
   @ApiPropertyOptional() @IsOptional() @IsDateString() dueDate?: string;
+}
+
+export class ReviewTaskDto {
+  @ApiProperty({ enum: ['ACCEPTED', 'RETURNED'] })
+  @IsIn(['ACCEPTED', 'RETURNED'])
+  decision: 'ACCEPTED' | 'RETURNED';
+
+  /** Bắt buộc khi trả lại: nhân viên cần biết phải sửa gì. */
+  @ApiPropertyOptional() @IsOptional() @IsString() note?: string;
 }
 
 export class CreateCommentDto {
@@ -199,6 +208,7 @@ export class TasksService {
       .createQueryBuilder('t')
       .leftJoinAndSelect('t.createdBy', 'creator')
       .leftJoinAndSelect('t.assignees', 'assignee')
+      .leftJoinAndSelect('t.reviewedBy', 'reviewer')
       .where('t.deleted_at IS NULL')
       // Sắp theo thời điểm đổi trạng thái gần nhất (mới nhất lên đầu)
       .orderBy('COALESCE(t.status_changed_at, t.created_at)', 'DESC');
@@ -247,6 +257,7 @@ export class TasksService {
       relations: {
         createdBy: true,
         assignees: true,
+        reviewedBy: true,
         comments: { user: true },
         attachments: { uploadedBy: true },
       },
@@ -317,8 +328,21 @@ export class TasksService {
       track('status', task.status, dto.status);
       task.status = dto.status;
       task.statusChangedAt = new Date();
-      if (dto.status === TaskStatus.DONE) task.completedAt = new Date();
-      else task.completedAt = null as any;
+      if (dto.status === TaskStatus.DONE) {
+        task.completedAt = new Date();
+        // Báo xong là chuyển sang chờ người giao việc đánh giá. Kể cả việc đã bị
+        // trả lại rồi làm lại cũng quay về chờ đánh giá.
+        task.reviewStatus = TaskReviewStatus.PENDING_REVIEW;
+        task.reviewedById = null;
+        task.reviewedAt = null;
+      } else {
+        task.completedAt = null as any;
+        // Rời khỏi Hoàn thành thì kết quả đánh giá cũ không còn ý nghĩa,
+        // trừ khi đang là RETURNED (nhân viên đang sửa lại theo góp ý).
+        if (task.reviewStatus !== TaskReviewStatus.RETURNED) {
+          task.reviewStatus = null;
+        }
+      }
     }
     if (dto.title       !== undefined && dto.title       !== task.title)       { track('title', task.title, dto.title);             task.title       = dto.title; }
     if (dto.description !== undefined && dto.description !== task.description) { track('description', task.description, dto.description); task.description = dto.description; }
@@ -350,6 +374,68 @@ export class TasksService {
         oldValue: e.oldValue,
         newValue: e.newValue,
       })));
+    }
+
+    return this.withLegacyAssignee(task);
+  }
+
+  /** Ai được đánh giá: người giao việc, Giám đốc, hoặc Quản lý phụ trách bộ phận. */
+  private async checkReviewAccess(task: Task, user: User): Promise<void> {
+    if (user.role === UserRole.GIAM_DOC) return;
+    if (task.createdById === user.id) return;
+    if (user.role === UserRole.QUAN_LY) {
+      const deptIds = await this.resolveManagerDeptIds(user.id);
+      if (deptIds.length > 0
+        && (task.assignees ?? []).some(a => deptIds.includes(Number(a.departmentId)))) return;
+    }
+    throw new ForbiddenException('Chỉ người giao việc hoặc quản lý mới được đánh giá công việc này');
+  }
+
+  async review(id: number, dto: ReviewTaskDto, user: User) {
+    const task = await this.findTaskOrFail(id);
+    await this.checkReviewAccess(task, user);
+
+    if (task.status !== TaskStatus.DONE) {
+      throw new BadRequestException('Chỉ đánh giá được công việc đã báo hoàn thành');
+    }
+
+    const note = (dto.note ?? '').trim();
+    if (dto.decision === 'RETURNED' && !note) {
+      throw new BadRequestException('Cần ghi góp ý để nhân viên biết phải sửa gì');
+    }
+
+    const before = task.reviewStatus;
+    task.reviewStatus = dto.decision === 'ACCEPTED'
+      ? TaskReviewStatus.ACCEPTED
+      : TaskReviewStatus.RETURNED;
+    task.reviewNote = note || null;
+    task.reviewedById = user.id;
+    task.reviewedAt = new Date();
+
+    // Trả lại thì đưa việc về Đang làm để nhân viên sửa tiếp.
+    if (dto.decision === 'RETURNED') {
+      task.status = TaskStatus.IN_PROGRESS;
+      task.statusChangedAt = new Date();
+      task.completedAt = null as any;
+    }
+
+    await this.taskRepo.save(task);
+
+    await this.historyRepo.save(this.historyRepo.create({
+      taskId: id,
+      changedById: user.id,
+      changeType: 'FIELD_UPDATE',
+      fieldName: 'reviewStatus',
+      oldValue: String(before ?? ''),
+      newValue: String(task.reviewStatus),
+    }));
+
+    // Góp ý hiện luôn trong phần bình luận để nhân viên thấy ngay ngữ cảnh.
+    if (note) {
+      const prefix = dto.decision === 'RETURNED' ? '[Trả lại] ' : '[Đạt] ';
+      await this.commentRepo.save(this.commentRepo.create({
+        taskId: id, userId: user.id, body: prefix + note,
+      }));
     }
 
     return this.withLegacyAssignee(task);

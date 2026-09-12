@@ -4,7 +4,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import {
-  TasksService, CreateTaskDto, UpdateTaskDto,
+  TasksService, CreateTaskDto, UpdateTaskDto, ReviewTaskDto,
   CreateCommentDto, CreateAttachmentDto,
 } from './tasks.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -41,6 +41,15 @@ export class TasksController {
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: User) {
     return this.tasksService.findOne(id, user);
+  }
+
+  @Patch(':id/review')
+  review(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: ReviewTaskDto,
+    @CurrentUser() user: User,
+  ) {
+    return this.tasksService.review(id, dto, user);
   }
 
   @Get(':id/history')

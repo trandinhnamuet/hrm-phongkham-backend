@@ -14,6 +14,13 @@ export enum TaskPriority {
   URGENT = 'URGENT',
 }
 
+/** Kết quả đánh giá của người giao việc, chỉ có nghĩa khi status = DONE. */
+export enum TaskReviewStatus {
+  PENDING_REVIEW = 'PENDING_REVIEW',
+  ACCEPTED = 'ACCEPTED',
+  RETURNED = 'RETURNED',
+}
+
 export enum TaskStatus {
   TODO = 'TODO',
   IN_PROGRESS = 'IN_PROGRESS',
@@ -67,6 +74,26 @@ export class Task {
 
   @Column({ name: 'status_changed_at', nullable: true, type: 'timestamptz' })
   statusChangedAt: Date;
+
+  /* ── Đánh giá của người giao việc ── */
+
+  @Column({
+    name: 'review_status', type: 'enum', enum: TaskReviewStatus, nullable: true,
+  })
+  reviewStatus: TaskReviewStatus | null;
+
+  @Column({ name: 'review_note', nullable: true, type: 'text' })
+  reviewNote: string | null;
+
+  @Column({ name: 'reviewed_by', nullable: true, type: 'uuid' })
+  reviewedById: string | null;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'reviewed_by' })
+  reviewedBy: User | null;
+
+  @Column({ name: 'reviewed_at', nullable: true, type: 'timestamptz' })
+  reviewedAt: Date | null;
 
   @OneToMany(() => TaskComment, (c) => c.task)
   comments: TaskComment[];
