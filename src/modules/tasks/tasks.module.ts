@@ -7,9 +7,13 @@ import { TaskAttachment } from '../../entities/task-attachment.entity';
 import { User } from '../../entities/user.entity';
 import { TasksController } from './tasks.controller';
 import { TasksService } from './tasks.service';
+import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Task, TaskHistory, TaskComment, TaskAttachment, User])],
+  imports: [
+    TypeOrmModule.forFeature([Task, TaskHistory, TaskComment, TaskAttachment, User]),
+    NotificationsModule,
+  ],
   controllers: [TasksController],
   providers: [TasksService],
 })

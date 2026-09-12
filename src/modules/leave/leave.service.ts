@@ -9,6 +9,8 @@ import { LeaveRequest, LeaveRequestStatus } from '../../entities/leave-request.e
 import { LeaveBalance } from '../../entities/leave-balance.entity';
 import { LeaveType } from '../../entities/leave-type.entity';
 import { User, UserRole } from '../../entities/user.entity';
+import { NotificationType } from '../../entities/notification.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 
 export class CreateLeaveTypeDto {
   @ApiProperty() @IsString() name: string;
@@ -47,6 +49,7 @@ export class LeaveService {
     @InjectRepository(LeaveBalance) private balanceRepo: Repository<LeaveBalance>,
     @InjectRepository(LeaveType) private typeRepo: Repository<LeaveType>,
     private dataSource: DataSource,
+    private notifications: NotificationsService,
   ) {}
 
   async getLeaveTypes() {
@@ -232,7 +235,21 @@ export class LeaveService {
         }
       }
 
-      return manager.save(LeaveRequest, request);
+      const saved = await manager.save(LeaveRequest, request);
+
+      // Báo cho người nộp đơn. Gọi sau khi lưu xong nên thông báo lỗi cũng không
+      // làm hỏng việc duyệt đơn.
+      const ok = dto.status === 'APPROVED';
+      await this.notifications.notify({
+        userIds: [request.userId],
+        actorId: reviewer.id,
+        type: NotificationType.LEAVE_REVIEWED,
+        title: `Đơn nghỉ ${request.leaveType.name} (${request.startDate} → ${request.endDate}) ${ok ? 'đã được duyệt' : 'bị từ chối'}`,
+        body: dto.reviewNote || null,
+        link: '/leave',
+      });
+
+      return saved;
     });
   }
 

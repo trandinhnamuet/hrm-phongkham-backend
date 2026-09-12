@@ -14,12 +14,14 @@ import { AttendanceAdjustment } from './entities/attendance-adjustment.entity';
 import { LeaveType } from './entities/leave-type.entity';
 import { LeaveBalance } from './entities/leave-balance.entity';
 import { LeaveRequest } from './entities/leave-request.entity';
+import { Notification } from './entities/notification.entity';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { DepartmentsModule } from './modules/departments/departments.module';
 import { TasksModule } from './modules/tasks/tasks.module';
 import { AttendanceModule } from './modules/attendance/attendance.module';
 import { LeaveModule } from './modules/leave/leave.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -38,6 +40,7 @@ import { LeaveModule } from './modules/leave/leave.module';
           Task, TaskHistory, TaskComment, TaskAttachment,
           Shift, AttendanceLog, AttendanceAdjustment,
           LeaveType, LeaveBalance, LeaveRequest,
+          Notification,
         ],
         migrations: [__dirname + '/migrations/*.{ts,js}'],
         migrationsRun: true,
@@ -53,6 +56,7 @@ import { LeaveModule } from './modules/leave/leave.module';
     TasksModule,
     AttendanceModule,
     LeaveModule,
+    NotificationsModule,
   ],
 })
 export class AppModule {}

@@ -12,6 +12,8 @@ import { TaskHistory } from '../../entities/task-history.entity';
 import { TaskComment } from '../../entities/task-comment.entity';
 import { TaskAttachment } from '../../entities/task-attachment.entity';
 import { User, UserRole } from '../../entities/user.entity';
+import { NotificationType } from '../../entities/notification.entity';
+import { NotificationsService } from '../notifications/notifications.service';
 
 export class CreateTaskDto {
   @ApiProperty() @IsString() title: string;
@@ -76,7 +78,11 @@ export class TasksService {
     @InjectRepository(TaskComment)    private commentRepo: Repository<TaskComment>,
     @InjectRepository(TaskAttachment) private attachRepo:  Repository<TaskAttachment>,
     @InjectRepository(User)           private userRepo:    Repository<User>,
+    private notifications: NotificationsService,
   ) {}
+
+  /** Đường dẫn mở thẳng hộp chi tiết của một công việc trên frontend. */
+  private taskLink(id: number | string) { return `/tasks?task=${id}`; }
 
   /* ── helpers ── */
 
@@ -291,6 +297,16 @@ export class TasksService {
     }));
 
     task.assignees = assignees;
+
+    await this.notifications.notify({
+      userIds: assignees.map(a => a.id),
+      actorId: user.id,
+      type: NotificationType.TASK_ASSIGNED,
+      title: `${user.fullName} giao việc cho bạn: ${task.title}`,
+      body: task.description,
+      link: this.taskLink(task.id),
+    });
+
     return this.withLegacyAssignee(task);
   }
 
@@ -354,11 +370,14 @@ export class TasksService {
         task.dueDate = new Date(dto.dueDate);
       }
     }
+    let newlyAdded: User[] = [];
     if (newAssignees !== undefined) {
-      const oldList = (task.assignees ?? []).map(a => a.id).sort().join(',');
+      const oldIds = new Set((task.assignees ?? []).map(a => a.id));
+      const oldList = [...oldIds].sort().join(',');
       const newList = newAssignees.map(a => a.id).sort().join(',');
       if (oldList !== newList) {
         track('assigneeIds', oldList, newList);
+        newlyAdded = newAssignees.filter(a => !oldIds.has(a.id));
         task.assignees = newAssignees;
       }
     }
@@ -374,6 +393,17 @@ export class TasksService {
         oldValue: e.oldValue,
         newValue: e.newValue,
       })));
+    }
+
+    if (newlyAdded.length > 0) {
+      await this.notifications.notify({
+        userIds: newlyAdded.map(a => a.id),
+        actorId: user.id,
+        type: NotificationType.TASK_ASSIGNED,
+        title: `${user.fullName} giao việc cho bạn: ${task.title}`,
+        body: task.description,
+        link: this.taskLink(task.id),
+      });
     }
 
     return this.withLegacyAssignee(task);
@@ -412,9 +442,9 @@ export class TasksService {
     task.reviewedById = user.id;
     task.reviewedAt = new Date();
 
-    // Trả lại thì đưa việc về Đang làm để nhân viên sửa tiếp.
+    // Trả lại thì đưa việc về Cần làm để nhân viên bắt đầu lại từ đầu.
     if (dto.decision === 'RETURNED') {
-      task.status = TaskStatus.IN_PROGRESS;
+      task.status = TaskStatus.TODO;
       task.statusChangedAt = new Date();
       task.completedAt = null as any;
     }
@@ -437,6 +467,16 @@ export class TasksService {
         taskId: id, userId: user.id, body: prefix + note,
       }));
     }
+
+    const verdict = dto.decision === 'RETURNED' ? 'Trả lại để làm lại' : 'Đạt';
+    await this.notifications.notify({
+      userIds: [...(task.assignees ?? []).map(a => a.id), task.createdById],
+      actorId: user.id,
+      type: NotificationType.TASK_REVIEWED,
+      title: `${user.fullName} đánh giá "${task.title}": ${verdict}`,
+      body: note || null,
+      link: this.taskLink(id),
+    });
 
     return this.withLegacyAssignee(task);
   }
@@ -463,7 +503,20 @@ export class TasksService {
   async addComment(taskId: number, dto: CreateCommentDto, user: User) {
     const task = await this.findTaskOrFail(taskId);
     await this.checkReadAccess(task, user);
-    return this.commentRepo.save(this.commentRepo.create({ taskId, userId: user.id, body: dto.body }));
+    const saved = await this.commentRepo.save(
+      this.commentRepo.create({ taskId, userId: user.id, body: dto.body }),
+    );
+
+    await this.notifications.notify({
+      userIds: [...(task.assignees ?? []).map(a => a.id), task.createdById],
+      actorId: user.id,
+      type: NotificationType.TASK_COMMENT,
+      title: `${user.fullName} bình luận về "${task.title}"`,
+      body: dto.body,
+      link: this.taskLink(taskId),
+    });
+
+    return saved;
   }
 
   async deleteComment(commentId: number, user: User) {
