@@ -36,7 +36,10 @@ export class AuthService {
   }
 
   async getMe(userId: string) {
-    const user = await this.userRepo.findOne({ where: { id: userId } });
+    const user = await this.userRepo.findOne({
+      where: { id: userId },
+      relations: { department: true, shift: true },
+    });
     if (!user) throw new UnauthorizedException();
     return this.sanitize(user);
   }

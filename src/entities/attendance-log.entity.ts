@@ -77,8 +77,15 @@ export class AttendanceLog {
   @Column({ name: 'late_minutes', type: 'int', default: 0 })
   lateMinutes: number;
 
+  @Column({ name: 'early_leave_minutes', type: 'int', default: 0 })
+  earlyLeaveMinutes: number;
+
   @Column({ name: 'worked_minutes', type: 'int', default: 0 })
   workedMinutes: number;
+
+  /** Tổng số phút phải làm theo ca của ngày hôm đó (sáng + chiều, nghỉ trưa không tính). */
+  @Column({ name: 'expected_minutes', type: 'int', default: 0 })
+  expectedMinutes: number;
 
   @Column({ name: 'is_adjusted', default: false })
   isAdjusted: boolean;

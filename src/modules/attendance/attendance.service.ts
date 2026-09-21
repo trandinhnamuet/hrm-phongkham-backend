@@ -38,9 +38,14 @@ export class ReviewAdjustmentDto {
 export class CreateShiftDto {
   @ApiProperty() @IsString() code: string;
   @ApiProperty() @IsString() name: string;
-  @ApiProperty() @IsString() startTime: string;
-  @ApiProperty() @IsString() endTime: string;
-  @ApiPropertyOptional() @IsOptional() @IsNumber() breakMinutes?: number;
+  @ApiPropertyOptional({ description: "Giờ vào buổi sáng, 'HH:mm'" })
+  @IsOptional() @IsString() morningStart?: string | null;
+  @ApiPropertyOptional({ description: "Giờ tan buổi sáng, 'HH:mm'" })
+  @IsOptional() @IsString() morningEnd?: string | null;
+  @ApiPropertyOptional({ description: "Giờ vào buổi chiều, 'HH:mm'" })
+  @IsOptional() @IsString() afternoonStart?: string | null;
+  @ApiPropertyOptional({ description: "Giờ tan buổi chiều, 'HH:mm'" })
+  @IsOptional() @IsString() afternoonEnd?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() graceMinutes?: number;
 }
 
@@ -56,11 +61,20 @@ export class UpdateLogDto {
 export class UpdateShiftDto {
   @ApiPropertyOptional() @IsOptional() @IsString() code?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() startTime?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() endTime?: string;
-  @ApiPropertyOptional() @IsOptional() @IsNumber() breakMinutes?: number;
+  @ApiPropertyOptional() @IsOptional() @IsString() morningStart?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsString() morningEnd?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsString() afternoonStart?: string | null;
+  @ApiPropertyOptional() @IsOptional() @IsString() afternoonEnd?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsNumber() graceMinutes?: number;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isActive?: boolean;
+}
+
+/** Bốn mốc giờ của một ca — dùng chung cho DTO và bản ghi đã lưu. */
+interface ShiftTimesInput {
+  morningStart?: string | null;
+  morningEnd?: string | null;
+  afternoonStart?: string | null;
+  afternoonEnd?: string | null;
 }
 
 @Injectable()
@@ -93,6 +107,92 @@ export class AttendanceService {
     return vn.getUTCHours() * 60 + vn.getUTCMinutes();
   }
 
+  /** 'HH:mm' hoặc 'HH:mm:ss' -> số phút tính từ 0h. */
+  private timeToMinutes(time?: string | null): number | null {
+    if (!time) return null;
+    const [h, m] = time.split(':').map(Number);
+    if (Number.isNaN(h) || Number.isNaN(m)) return null;
+    return h * 60 + m;
+  }
+
+  /** Các khoảng giờ làm việc của ca (sáng, chiều) dưới dạng [từ, đến] phút. */
+  private shiftSessions(shift?: Shift | null): Array<[number, number]> {
+    if (!shift) return [];
+    const sessions: Array<[number, number]> = [];
+    const pairs: Array<[string | null, string | null]> = [
+      [shift.morningStart, shift.morningEnd],
+      [shift.afternoonStart, shift.afternoonEnd],
+    ];
+    for (const [from, to] of pairs) {
+      const a = this.timeToMinutes(from);
+      const b = this.timeToMinutes(to);
+      if (a !== null && b !== null && b > a) sessions.push([a, b]);
+    }
+    return sessions.sort((x, y) => x[0] - y[0]);
+  }
+
+  /**
+   * Số phút NẰM TRONG giờ làm của ca, giữa hai mốc `from`..`to`.
+   * Khoảng nghỉ trưa là chỗ trống giữa hai buổi nên tự động không được tính.
+   */
+  private scheduledMinutesBetween(
+    sessions: Array<[number, number]>,
+    from: number,
+    to: number,
+  ): number {
+    if (to <= from) return 0;
+    return sessions.reduce(
+      (sum, [a, b]) => sum + Math.max(0, Math.min(b, to) - Math.max(a, from)),
+      0,
+    );
+  }
+
+  /**
+   * Tính công một ngày theo giờ làm việc của ca.
+   *
+   * Đi muộn và về sớm được quy ra "số phút làm việc theo ca bị thiếu", nên một
+   * người đến lúc 14:05 của ca 7:00-11:30/14:00-17:30 bị tính muộn 275 phút
+   * (cả buổi sáng + 5 phút) chứ không phải 425 phút — 2 tiếng rưỡi nghỉ trưa
+   * không phải giờ làm nên không bị tính vào.
+   *
+   * Trả về null nếu ngày đó không gắn với ca nào.
+   */
+  private computeAgainstShift(
+    shift: Shift | null | undefined,
+    checkInMins: number,
+    checkOutMins: number | null,
+  ) {
+    const sessions = this.shiftSessions(shift);
+    if (sessions.length === 0) return null;
+
+    const dayStart = sessions[0][0];
+    const dayEnd = sessions[sessions.length - 1][1];
+    const grace = shift?.graceMinutes ?? 0;
+
+    // Đến sớm hoặc trong khoảng gia hạn đều tính từ giờ bắt đầu ca.
+    const effectiveIn = checkInMins <= dayStart + grace ? dayStart : checkInMins;
+    const expectedMinutes = this.scheduledMinutesBetween(sessions, dayStart, dayEnd);
+    const lateMinutes = this.scheduledMinutesBetween(sessions, dayStart, effectiveIn);
+
+    if (checkOutMins === null) {
+      return { expectedMinutes, lateMinutes, earlyLeaveMinutes: 0, workedMinutes: 0 };
+    }
+
+    // Chấm ra sau nửa đêm thì phút-từ-0h nhỏ hơn giờ vào -> coi như làm hết ca.
+    const effectiveOut = checkOutMins < effectiveIn ? dayEnd : checkOutMins;
+    const workedMinutes = this.scheduledMinutesBetween(sessions, effectiveIn, effectiveOut);
+    const earlyLeaveMinutes = this.scheduledMinutesBetween(sessions, effectiveOut, dayEnd);
+
+    return { expectedMinutes, lateMinutes, earlyLeaveMinutes, workedMinutes };
+  }
+
+  /** Trạng thái suy ra từ kết quả tính công theo ca. */
+  private statusFromCalc(calc: { lateMinutes: number; earlyLeaveMinutes: number }) {
+    if (calc.earlyLeaveMinutes > 0) return AttendanceStatus.SHORT_HOURS;
+    if (calc.lateMinutes > 0) return AttendanceStatus.LATE;
+    return AttendanceStatus.PRESENT;
+  }
+
   async checkIn(user: User, dto: CheckInDto) {
     const now = new Date();
     const today = this.toVnDateStr(now);
@@ -107,24 +207,22 @@ export class AttendanceService {
       );
     }
 
-    const shift = await this.getShiftForToday();
-    let lateMinutes = 0;
-
-    if (shift) {
-      const [h, m] = shift.startTime.split(':').map(Number);
-      const shiftStartMins = h * 60 + m + shift.graceMinutes;
-      const nowMins = this.vnMinutesFromMidnight(now);
-      lateMinutes = Math.max(0, nowMins - shiftStartMins);
-    }
+    const shift = await this.getShiftForUser(user);
+    const calc = this.computeAgainstShift(shift, this.vnMinutesFromMidnight(now), null);
+    const lateMinutes = calc?.lateMinutes ?? 0;
+    const expectedMinutes = calc?.expectedMinutes ?? 0;
+    const status = lateMinutes > 0 ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
 
     if (existing) {
+      existing.shiftId = shift?.id ?? existing.shiftId;
       existing.checkInAt = now;
       existing.checkInLat = dto.lat;
       existing.checkInLng = dto.lng;
       existing.checkInDistanceM = Math.round(distance);
       existing.checkInValid = valid;
       existing.lateMinutes = lateMinutes;
-      existing.status = lateMinutes > 0 ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
+      existing.expectedMinutes = expectedMinutes;
+      existing.status = status;
       return this.logRepo.save(existing);
     }
 
@@ -138,7 +236,8 @@ export class AttendanceService {
       checkInDistanceM: Math.round(distance),
       checkInValid: valid,
       lateMinutes,
-      status: lateMinutes > 0 ? AttendanceStatus.LATE : AttendanceStatus.PRESENT,
+      expectedMinutes,
+      status,
     });
     return this.logRepo.save(log);
   }
@@ -168,12 +267,21 @@ export class AttendanceService {
     log.checkOutValid = valid;
 
     if (log.checkInAt) {
-      const workedMs = now.getTime() - log.checkInAt.getTime();
-      const breakMs = (log.shift?.breakMinutes || 0) * 60000;
-      log.workedMinutes = Math.max(0, Math.floor((workedMs - breakMs) / 60000));
+      const calc = this.computeAgainstShift(
+        log.shift,
+        this.vnMinutesFromMidnight(log.checkInAt),
+        this.vnMinutesFromMidnight(now),
+      );
 
-      if (log.workedMinutes < 480) {
-        log.status = AttendanceStatus.SHORT_HOURS;
+      if (calc) {
+        log.expectedMinutes = calc.expectedMinutes;
+        log.lateMinutes = calc.lateMinutes;
+        log.earlyLeaveMinutes = calc.earlyLeaveMinutes;
+        log.workedMinutes = calc.workedMinutes;
+        log.status = this.statusFromCalc(calc);
+      } else {
+        // Ngày đó không gắn ca nào -> đếm theo thời gian có mặt thực tế.
+        log.workedMinutes = Math.max(0, Math.floor((now.getTime() - log.checkInAt.getTime()) / 60000));
       }
     }
 
@@ -246,29 +354,35 @@ export class AttendanceService {
       throw new BadRequestException('Giờ ra phải sau giờ vào');
     }
 
-    // Tính lại đi muộn theo ca của ngày đó
-    if (log.checkInAt && log.shift) {
-      const [h, m] = log.shift.startTime.split(':').map(Number);
-      const startMins = h * 60 + m + (log.shift.graceMinutes || 0);
-      log.lateMinutes = Math.max(0, this.vnMinutesFromMidnight(log.checkInAt) - startMins);
-    } else if (!log.checkInAt) {
-      log.lateMinutes = 0;
-    }
+    // Tính lại toàn bộ chỉ số theo giờ làm việc của ca trong ngày đó.
+    const calc = log.checkInAt
+      ? this.computeAgainstShift(
+          log.shift,
+          this.vnMinutesFromMidnight(log.checkInAt),
+          log.checkOutAt ? this.vnMinutesFromMidnight(log.checkOutAt) : null,
+        )
+      : null;
 
-    // Tính lại số phút làm
-    if (log.checkInAt && log.checkOutAt) {
-      const breakMs = (log.shift?.breakMinutes || 0) * 60000;
-      const ms = log.checkOutAt.getTime() - log.checkInAt.getTime() - breakMs;
-      log.workedMinutes = Math.max(0, Math.floor(ms / 60000));
+    if (calc) {
+      log.expectedMinutes = calc.expectedMinutes;
+      log.lateMinutes = calc.lateMinutes;
+      log.earlyLeaveMinutes = log.checkOutAt ? calc.earlyLeaveMinutes : 0;
+      log.workedMinutes = log.checkOutAt ? calc.workedMinutes : 0;
     } else {
-      log.workedMinutes = 0;
+      log.lateMinutes = 0;
+      log.earlyLeaveMinutes = 0;
+      log.workedMinutes = log.checkInAt && log.checkOutAt
+        ? Math.max(0, Math.floor((log.checkOutAt.getTime() - log.checkInAt.getTime()) / 60000))
+        : 0;
     }
 
     // Trạng thái: ưu tiên giá trị người sửa chọn, không thì suy ra từ giờ.
     if (dto.status !== undefined) {
       log.status = dto.status;
     } else if (log.checkInAt) {
-      log.status = log.lateMinutes > 0 ? AttendanceStatus.LATE : AttendanceStatus.PRESENT;
+      log.status = calc && log.checkOutAt
+        ? this.statusFromCalc(calc)
+        : (log.lateMinutes > 0 ? AttendanceStatus.LATE : AttendanceStatus.PRESENT);
     }
 
     log.isAdjusted = true;
@@ -348,19 +462,84 @@ export class AttendanceService {
   }
 
   async getShifts() {
-    return this.shiftRepo.find({ where: { isActive: true } });
+    return this.shiftRepo.find({ where: { isActive: true }, order: { id: 'ASC' } });
+  }
+
+  /**
+   * Bỏ các key mang giá trị `undefined`.
+   *
+   * tsconfig để target ES2023 nên mỗi field khai báo trong DTO đều thành thuộc
+   * tính thật với giá trị undefined. Trải thẳng DTO lên bản ghi cũ vì thế sẽ
+   * xoá mất những mốc giờ mà request không gửi kèm.
+   */
+  private definedOnly<T extends object>(obj: T): Partial<T> {
+    return Object.fromEntries(
+      Object.entries(obj).filter(([, v]) => v !== undefined),
+    ) as Partial<T>;
+  }
+
+  /**
+   * Chuẩn hoá 'HH:mm' -> 'HH:mm:00' và kiểm tra thứ tự bốn mốc giờ của ca.
+   * DB cũng có CHECK tương ứng; kiểm ở đây để trả lỗi tiếng Việt thay vì 500.
+   */
+  private normalizeShiftTimes<T extends ShiftTimesInput>(dto: T) {
+    const norm = (t?: string | null) => {
+      if (!t) return null;
+      const parts = t.split(':');
+      if (parts.length < 2) throw new BadRequestException(`Giờ không hợp lệ: ${t}`);
+      return `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}:00`;
+    };
+
+    const times = {
+      morningStart: norm(dto.morningStart),
+      morningEnd: norm(dto.morningEnd),
+      afternoonStart: norm(dto.afternoonStart),
+      afternoonEnd: norm(dto.afternoonEnd),
+    };
+
+    const hasMorning = !!(times.morningStart || times.morningEnd);
+    const hasAfternoon = !!(times.afternoonStart || times.afternoonEnd);
+    if (hasMorning && !(times.morningStart && times.morningEnd)) {
+      throw new BadRequestException('Buổi sáng phải có cả giờ vào và giờ tan');
+    }
+    if (hasAfternoon && !(times.afternoonStart && times.afternoonEnd)) {
+      throw new BadRequestException('Buổi chiều phải có cả giờ vào và giờ tan');
+    }
+    if (!hasMorning && !hasAfternoon) {
+      throw new BadRequestException('Ca làm việc phải có ít nhất một buổi');
+    }
+
+    const ms = this.timeToMinutes(times.morningStart);
+    const me = this.timeToMinutes(times.morningEnd);
+    const as = this.timeToMinutes(times.afternoonStart);
+    const ae = this.timeToMinutes(times.afternoonEnd);
+    if (ms !== null && me !== null && me <= ms) {
+      throw new BadRequestException('Giờ tan buổi sáng phải sau giờ vào buổi sáng');
+    }
+    if (as !== null && ae !== null && ae <= as) {
+      throw new BadRequestException('Giờ tan buổi chiều phải sau giờ vào buổi chiều');
+    }
+    if (me !== null && as !== null && as < me) {
+      throw new BadRequestException('Giờ vào buổi chiều phải sau giờ tan buổi sáng');
+    }
+
+    return times;
   }
 
   async createShift(dto: CreateShiftDto) {
     // code unique o DB, ma deleteShift la soft-delete. Neu chi bao trung ma thi
     // ma cua ca da xoa bi khoa vinh vien va nguoi dung khong con thay no de sua.
     const existing = await this.shiftRepo.findOne({ where: { code: dto.code } });
+    // normalizeShiftTimes chỉ trả về 4 mốc giờ nên phải trải dto trước, không thì
+    // code/name rơi mất và INSERT vi phạm NOT NULL.
     if (existing) {
       if (existing.isActive) throw new ConflictException('Mã ca đã tồn tại');
-      Object.assign(existing, dto, { isActive: true });
+      Object.assign(existing, this.definedOnly(dto), this.normalizeShiftTimes(dto), { isActive: true });
       return this.shiftRepo.save(existing);
     }
-    return this.shiftRepo.save(this.shiftRepo.create(dto));
+    return this.shiftRepo.save(
+      this.shiftRepo.create({ ...dto, ...this.normalizeShiftTimes(dto) }),
+    );
   }
 
   async updateShift(id: number, dto: UpdateShiftDto) {
@@ -372,7 +551,8 @@ export class AttendanceService {
       if (dup) throw new ConflictException('Mã ca đã tồn tại');
     }
 
-    Object.assign(shift, dto);
+    const changes = this.definedOnly(dto);
+    Object.assign(shift, changes, this.normalizeShiftTimes({ ...shift, ...changes }));
     await this.shiftRepo.save(shift);
     // Doc lai de tra ve day du field: save() chi tra ve cac cot vua doi.
     return this.shiftRepo.findOne({ where: { id } });
@@ -381,9 +561,19 @@ export class AttendanceService {
   async deleteShift(id: number) {
     const shift = await this.shiftRepo.findOne({ where: { id } });
     if (!shift) throw new NotFoundException('Không tìm thấy ca làm việc');
+
+    // Bỏ ca mà nhân viên vẫn đang thuộc thì họ chấm công theo một ca đã ngừng
+    // dùng — bắt chuyển người sang ca khác trước cho rõ ràng.
+    const inUse = await this.userRepo.count({ where: { shiftId: id } });
+    if (inUse > 0) {
+      throw new ConflictException(
+        `Còn ${inUse} nhân viên đang thuộc ca này. Hãy chuyển họ sang ca khác trước.`,
+      );
+    }
+
     // Soft-delete: bang cham cong con tham chieu shift_id nen khong xoa han.
     await this.shiftRepo.update(id, { isActive: false });
-    return { message: 'Đã xóa ca làm việc' };
+    return { message: 'Đã ngừng sử dụng ca làm việc' };
   }
 
   async getSettings() {
@@ -408,8 +598,13 @@ export class AttendanceService {
     return { distance, valid: distance <= settings.gpsRadiusM };
   }
 
-  private async getShiftForToday() {
-    const shifts = await this.shiftRepo.find({ where: { isActive: true } });
-    return shifts.find((s) => s.code === 'FULL_DAY') || shifts[0] || null;
+  /** Ca của nhân viên; chưa được gán thì dùng ca đang hoạt động đầu tiên. */
+  private async getShiftForUser(user: User): Promise<Shift | null> {
+    if (user.shiftId) {
+      const assigned = await this.shiftRepo.findOne({ where: { id: user.shiftId } });
+      if (assigned) return assigned;
+    }
+    const shifts = await this.shiftRepo.find({ where: { isActive: true }, order: { id: 'ASC' } });
+    return shifts[0] ?? null;
   }
 }

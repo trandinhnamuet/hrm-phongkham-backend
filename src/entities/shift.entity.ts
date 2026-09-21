@@ -2,12 +2,11 @@ import {
   Entity, PrimaryGeneratedColumn, Column, CreateDateColumn,
 } from 'typeorm';
 
-export enum ShiftCode {
-  MORNING = 'MORNING',
-  AFTERNOON = 'AFTERNOON',
-  FULL_DAY = 'FULL_DAY',
-}
-
+/**
+ * Một ca làm việc = giờ làm của CẢ NGÀY: buổi sáng + buổi chiều.
+ * Nghỉ trưa chính là khoảng trống giữa `morningEnd` và `afternoonStart`,
+ * nên không cần khai báo riêng số phút nghỉ.
+ */
 @Entity({ name: 'shifts', schema: 'HRM' })
 export class Shift {
   @PrimaryGeneratedColumn('increment', { type: 'bigint' })
@@ -19,14 +18,19 @@ export class Shift {
   @Column({ length: 100 })
   name: string;
 
-  @Column({ name: 'start_time', type: 'time' })
-  startTime: string;
+  /** 'HH:mm:ss'. Null nếu ca không làm buổi sáng. */
+  @Column({ name: 'morning_start', type: 'time', nullable: true })
+  morningStart: string | null;
 
-  @Column({ name: 'end_time', type: 'time' })
-  endTime: string;
+  @Column({ name: 'morning_end', type: 'time', nullable: true })
+  morningEnd: string | null;
 
-  @Column({ name: 'break_minutes', type: 'smallint', default: 0 })
-  breakMinutes: number;
+  /** 'HH:mm:ss'. Null nếu ca không làm buổi chiều. */
+  @Column({ name: 'afternoon_start', type: 'time', nullable: true })
+  afternoonStart: string | null;
+
+  @Column({ name: 'afternoon_end', type: 'time', nullable: true })
+  afternoonEnd: string | null;
 
   @Column({ name: 'grace_minutes', type: 'smallint', default: 5 })
   graceMinutes: number;

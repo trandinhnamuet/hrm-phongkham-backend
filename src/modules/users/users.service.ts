@@ -25,6 +25,8 @@ export class CreateUserDto {
   @ApiPropertyOptional() @IsOptional() @IsString() positionTitle?: string;
   @ApiPropertyOptional() @IsOptional() joinDate?: string;
   @ApiPropertyOptional() @IsOptional() departmentId?: number;
+  @ApiPropertyOptional({ description: 'Ca làm việc dùng để tính công' })
+  @IsOptional() @Type(() => Number) @IsInt() shiftId?: number;
 }
 
 export class UpdateUserDto {
@@ -35,6 +37,8 @@ export class UpdateUserDto {
   @ApiPropertyOptional() @IsOptional() @IsEnum(UserStatus) status?: UserStatus;
   @ApiPropertyOptional() @IsOptional() @IsString() avatarUrl?: string;
   @ApiPropertyOptional() @IsOptional() departmentId?: number | null;
+  @ApiPropertyOptional({ description: 'Ca làm việc dùng để tính công' })
+  @IsOptional() shiftId?: number | null;
   @ApiPropertyOptional() @IsOptional() managedDepartmentIds?: number[];
 }
 
@@ -52,6 +56,7 @@ export class UsersService {
   async findAll(role?: UserRole, status?: UserStatus) {
     const qb = this.repo.createQueryBuilder('u')
       .leftJoinAndSelect('u.department', 'dept')
+      .leftJoinAndSelect('u.shift', 'shift')
       .leftJoinAndSelect('u.managedDepartments', 'managedDepts')
       .orderBy('u.fullName', 'ASC');
     if (role)   qb.andWhere('u.role = :role',     { role });
@@ -62,7 +67,7 @@ export class UsersService {
   async findOne(id: string) {
     const user = await this.repo.findOne({
       where: { id },
-      relations: { department: true, managedDepartments: true },
+      relations: { department: true, shift: true, managedDepartments: true },
     });
     if (!user) throw new NotFoundException('Không tìm thấy nhân viên');
     return this.sanitize(user);
@@ -123,6 +128,7 @@ export class UsersService {
       positionTitle: dto.positionTitle,
       joinDate: dto.joinDate ? new Date(dto.joinDate) : undefined,
       departmentId: dto.departmentId || undefined,
+      shiftId: dto.shiftId || undefined,
     });
     return this.sanitize(await this.repo.save(user));
   }

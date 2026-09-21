@@ -56,10 +56,20 @@ async function seed() {
   console.log('✅ Departments seeded');
 
   const shiftRepo = ds.getRepository(Shift);
+  // Một ca = giờ làm việc của cả ngày (buổi sáng + buổi chiều).
   const shiftData = [
-    { code: 'MORNING', name: 'Ca sáng', startTime: '08:00', endTime: '12:00', breakMinutes: 0, graceMinutes: 5 },
-    { code: 'AFTERNOON', name: 'Ca chiều', startTime: '13:00', endTime: '17:00', breakMinutes: 0, graceMinutes: 5 },
-    { code: 'FULL_DAY', name: 'Cả ngày', startTime: '08:00', endTime: '17:00', breakMinutes: 60, graceMinutes: 5 },
+    {
+      code: 'CA_1', name: 'Ca 1',
+      morningStart: '07:00', morningEnd: '11:30',
+      afternoonStart: '14:00', afternoonEnd: '17:30',
+      graceMinutes: 5,
+    },
+    {
+      code: 'CA_2', name: 'Ca 2',
+      morningStart: '07:30', morningEnd: '11:30',
+      afternoonStart: '13:00', afternoonEnd: '18:00',
+      graceMinutes: 5,
+    },
   ];
   for (const s of shiftData) {
     const existing = await shiftRepo.findOne({ where: { code: s.code } });

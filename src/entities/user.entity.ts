@@ -5,6 +5,7 @@ import {
 } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { Department } from './department.entity';
+import { Shift } from './shift.entity';
 
 export enum UserRole {
   GIAM_DOC = 'GIAM_DOC',
@@ -58,6 +59,14 @@ export class User {
   @ManyToOne(() => Department, { nullable: true, onDelete: 'SET NULL', eager: false })
   @JoinColumn({ name: 'department_id' })
   department: Department;
+
+  /** Ca làm việc của nhân viên — chấm công được tính theo giờ của ca này. */
+  @Column({ name: 'shift_id', nullable: true, type: 'bigint' })
+  shiftId: number;
+
+  @ManyToOne(() => Shift, { nullable: true, onDelete: 'SET NULL', eager: false })
+  @JoinColumn({ name: 'shift_id' })
+  shift: Shift;
 
   @Column({ name: 'last_login_at', nullable: true, type: 'timestamptz' })
   lastLoginAt: Date;
