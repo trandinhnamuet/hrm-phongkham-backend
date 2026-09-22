@@ -27,7 +27,7 @@ async function bootstrap() {
   });
 
   const config = new DocumentBuilder()
-    .setTitle('HRM Phòng Khám API')
+    .setTitle('HRM Nha Khoa Gia Đình API')
     .setDescription('API cho hệ thống HRM phòng khám nha khoa')
     .setVersion('1.0')
     .addBearerAuth()
