@@ -5,14 +5,15 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
-  IsBoolean, IsDateString, IsEnum, IsIn, IsNumber, IsOptional, IsString, Min, Max,
+  ArrayMinSize, IsArray, IsBoolean, IsDateString, IsEnum, IsIn, IsNumber, IsOptional, IsString,
+  Min, Max, ValidateNested,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { AttendanceLog, AttendanceStatus } from '../../entities/attendance-log.entity';
 import { AttendanceAdjustment, AdjustmentField, AdjustmentStatus } from '../../entities/attendance-adjustment.entity';
 import { ClinicSettings } from '../../entities/clinic-settings.entity';
-import { Shift } from '../../entities/shift.entity';
+import { Shift, ShiftSession } from '../../entities/shift.entity';
 import { User, UserRole } from '../../entities/user.entity';
 import { haversineDistance } from '../../common/utils/haversine';
 
@@ -35,17 +36,18 @@ export class ReviewAdjustmentDto {
   @ApiPropertyOptional() @IsOptional() @IsString() reviewNote?: string;
 }
 
+export class ShiftSessionDto {
+  @ApiProperty({ example: 'Buổi sáng' }) @IsString() name: string;
+  @ApiProperty({ description: "Giờ vào, 'HH:mm'", example: '07:00' }) @IsString() start: string;
+  @ApiProperty({ description: "Giờ tan, 'HH:mm'", example: '11:30' }) @IsString() end: string;
+}
+
 export class CreateShiftDto {
   @ApiProperty() @IsString() code: string;
   @ApiProperty() @IsString() name: string;
-  @ApiPropertyOptional({ description: "Giờ vào buổi sáng, 'HH:mm'" })
-  @IsOptional() @IsString() morningStart?: string | null;
-  @ApiPropertyOptional({ description: "Giờ tan buổi sáng, 'HH:mm'" })
-  @IsOptional() @IsString() morningEnd?: string | null;
-  @ApiPropertyOptional({ description: "Giờ vào buổi chiều, 'HH:mm'" })
-  @IsOptional() @IsString() afternoonStart?: string | null;
-  @ApiPropertyOptional({ description: "Giờ tan buổi chiều, 'HH:mm'" })
-  @IsOptional() @IsString() afternoonEnd?: string | null;
+  @ApiProperty({ type: [ShiftSessionDto], description: 'Các buổi làm trong ca, ít nhất một buổi' })
+  @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => ShiftSessionDto)
+  sessions: ShiftSessionDto[];
   @ApiPropertyOptional() @IsOptional() @IsNumber() graceMinutes?: number;
 }
 
@@ -61,20 +63,11 @@ export class UpdateLogDto {
 export class UpdateShiftDto {
   @ApiPropertyOptional() @IsOptional() @IsString() code?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() name?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() morningStart?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsString() morningEnd?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsString() afternoonStart?: string | null;
-  @ApiPropertyOptional() @IsOptional() @IsString() afternoonEnd?: string | null;
+  @ApiPropertyOptional({ type: [ShiftSessionDto] })
+  @IsOptional() @IsArray() @ArrayMinSize(1) @ValidateNested({ each: true }) @Type(() => ShiftSessionDto)
+  sessions?: ShiftSessionDto[];
   @ApiPropertyOptional() @IsOptional() @IsNumber() graceMinutes?: number;
   @ApiPropertyOptional() @IsOptional() @IsBoolean() isActive?: boolean;
-}
-
-/** Bốn mốc giờ của một ca — dùng chung cho DTO và bản ghi đã lưu. */
-interface ShiftTimesInput {
-  morningStart?: string | null;
-  morningEnd?: string | null;
-  afternoonStart?: string | null;
-  afternoonEnd?: string | null;
 }
 
 @Injectable()
@@ -115,17 +108,13 @@ export class AttendanceService {
     return h * 60 + m;
   }
 
-  /** Các khoảng giờ làm việc của ca (sáng, chiều) dưới dạng [từ, đến] phút. */
+  /** Các buổi làm việc của ca dưới dạng [từ, đến] phút. */
   private shiftSessions(shift?: Shift | null): Array<[number, number]> {
     if (!shift) return [];
     const sessions: Array<[number, number]> = [];
-    const pairs: Array<[string | null, string | null]> = [
-      [shift.morningStart, shift.morningEnd],
-      [shift.afternoonStart, shift.afternoonEnd],
-    ];
-    for (const [from, to] of pairs) {
-      const a = this.timeToMinutes(from);
-      const b = this.timeToMinutes(to);
+    for (const { start, end } of shift.sessions ?? []) {
+      const a = this.timeToMinutes(start);
+      const b = this.timeToMinutes(end);
       if (a !== null && b !== null && b > a) sessions.push([a, b]);
     }
     return sessions.sort((x, y) => x[0] - y[0]);
@@ -133,7 +122,7 @@ export class AttendanceService {
 
   /**
    * Số phút NẰM TRONG giờ làm của ca, giữa hai mốc `from`..`to`.
-   * Khoảng nghỉ trưa là chỗ trống giữa hai buổi nên tự động không được tính.
+   * Khoảng nghỉ là chỗ trống giữa các buổi nên tự động không được tính.
    */
   private scheduledMinutesBetween(
     sessions: Array<[number, number]>,
@@ -470,7 +459,7 @@ export class AttendanceService {
    *
    * tsconfig để target ES2023 nên mỗi field khai báo trong DTO đều thành thuộc
    * tính thật với giá trị undefined. Trải thẳng DTO lên bản ghi cũ vì thế sẽ
-   * xoá mất những mốc giờ mà request không gửi kèm.
+   * xoá mất những field mà request không gửi kèm.
    */
   private definedOnly<T extends object>(obj: T): Partial<T> {
     return Object.fromEntries(
@@ -479,67 +468,56 @@ export class AttendanceService {
   }
 
   /**
-   * Chuẩn hoá 'HH:mm' -> 'HH:mm:00' và kiểm tra thứ tự bốn mốc giờ của ca.
-   * DB cũng có CHECK tương ứng; kiểm ở đây để trả lỗi tiếng Việt thay vì 500.
+   * Chuẩn hoá danh sách buổi của ca: giờ 'HH:mm' -> 'HH:mm:00', xếp theo giờ vào,
+   * và kiểm tra mỗi buổi có giờ tan sau giờ vào, các buổi không chồng lên nhau.
+   * DB chỉ chặn ca rỗng; kiểm ở đây để trả lỗi tiếng Việt thay vì lưu dữ liệu sai.
    */
-  private normalizeShiftTimes<T extends ShiftTimesInput>(dto: T) {
-    const norm = (t?: string | null) => {
-      if (!t) return null;
-      const parts = t.split(':');
-      if (parts.length < 2) throw new BadRequestException(`Giờ không hợp lệ: ${t}`);
-      return `${parts[0].padStart(2, '0')}:${parts[1].padStart(2, '0')}:00`;
-    };
-
-    const times = {
-      morningStart: norm(dto.morningStart),
-      morningEnd: norm(dto.morningEnd),
-      afternoonStart: norm(dto.afternoonStart),
-      afternoonEnd: norm(dto.afternoonEnd),
-    };
-
-    const hasMorning = !!(times.morningStart || times.morningEnd);
-    const hasAfternoon = !!(times.afternoonStart || times.afternoonEnd);
-    if (hasMorning && !(times.morningStart && times.morningEnd)) {
-      throw new BadRequestException('Buổi sáng phải có cả giờ vào và giờ tan');
-    }
-    if (hasAfternoon && !(times.afternoonStart && times.afternoonEnd)) {
-      throw new BadRequestException('Buổi chiều phải có cả giờ vào và giờ tan');
-    }
-    if (!hasMorning && !hasAfternoon) {
+  private normalizeSessions(input?: ShiftSessionDto[] | null): ShiftSession[] {
+    if (!input?.length) {
       throw new BadRequestException('Ca làm việc phải có ít nhất một buổi');
     }
 
-    const ms = this.timeToMinutes(times.morningStart);
-    const me = this.timeToMinutes(times.morningEnd);
-    const as = this.timeToMinutes(times.afternoonStart);
-    const ae = this.timeToMinutes(times.afternoonEnd);
-    if (ms !== null && me !== null && me <= ms) {
-      throw new BadRequestException('Giờ tan buổi sáng phải sau giờ vào buổi sáng');
-    }
-    if (as !== null && ae !== null && ae <= as) {
-      throw new BadRequestException('Giờ tan buổi chiều phải sau giờ vào buổi chiều');
-    }
-    if (me !== null && as !== null && as < me) {
-      throw new BadRequestException('Giờ vào buổi chiều phải sau giờ tan buổi sáng');
-    }
+    const norm = (t: string, label: string) => {
+      const mins = this.timeToMinutes(t);
+      if (mins === null || mins < 0 || mins >= 24 * 60) {
+        throw new BadRequestException(`${label}: giờ không hợp lệ (${t})`);
+      }
+      return `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(mins % 60).padStart(2, '0')}:00`;
+    };
 
-    return times;
+    const sessions = input.map((s, idx) => {
+      const name = (s.name ?? '').trim() || `Buổi ${idx + 1}`;
+      const start = norm(s.start, name);
+      const end = norm(s.end, name);
+      if (end <= start) {
+        throw new BadRequestException(`${name}: giờ tan phải sau giờ vào`);
+      }
+      return { name, start, end };
+    });
+
+    // 'HH:mm:ss' cùng độ dài nên so chuỗi cũng là so giờ.
+    sessions.sort((a, b) => a.start.localeCompare(b.start));
+    for (let k = 1; k < sessions.length; k++) {
+      const prev = sessions[k - 1];
+      const cur = sessions[k];
+      if (cur.start < prev.end) {
+        throw new BadRequestException(`${cur.name} bị trùng giờ với ${prev.name}`);
+      }
+    }
+    return sessions;
   }
 
   async createShift(dto: CreateShiftDto) {
     // code unique o DB, ma deleteShift la soft-delete. Neu chi bao trung ma thi
     // ma cua ca da xoa bi khoa vinh vien va nguoi dung khong con thay no de sua.
     const existing = await this.shiftRepo.findOne({ where: { code: dto.code } });
-    // normalizeShiftTimes chỉ trả về 4 mốc giờ nên phải trải dto trước, không thì
-    // code/name rơi mất và INSERT vi phạm NOT NULL.
+    const sessions = this.normalizeSessions(dto.sessions);
     if (existing) {
       if (existing.isActive) throw new ConflictException('Mã ca đã tồn tại');
-      Object.assign(existing, this.definedOnly(dto), this.normalizeShiftTimes(dto), { isActive: true });
+      Object.assign(existing, this.definedOnly(dto), { sessions, isActive: true });
       return this.shiftRepo.save(existing);
     }
-    return this.shiftRepo.save(
-      this.shiftRepo.create({ ...dto, ...this.normalizeShiftTimes(dto) }),
-    );
+    return this.shiftRepo.save(this.shiftRepo.create({ ...dto, sessions }));
   }
 
   async updateShift(id: number, dto: UpdateShiftDto) {
@@ -551,8 +529,9 @@ export class AttendanceService {
       if (dup) throw new ConflictException('Mã ca đã tồn tại');
     }
 
-    const changes = this.definedOnly(dto);
-    Object.assign(shift, changes, this.normalizeShiftTimes({ ...shift, ...changes }));
+    const { sessions, ...changes } = this.definedOnly(dto);
+    Object.assign(shift, changes);
+    if (sessions !== undefined) shift.sessions = this.normalizeSessions(sessions);
     await this.shiftRepo.save(shift);
     // Doc lai de tra ve day du field: save() chi tra ve cac cot vua doi.
     return this.shiftRepo.findOne({ where: { id } });

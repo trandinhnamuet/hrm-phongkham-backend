@@ -56,18 +56,22 @@ async function seed() {
   console.log('✅ Departments seeded');
 
   const shiftRepo = ds.getRepository(Shift);
-  // Một ca = giờ làm việc của cả ngày (buổi sáng + buổi chiều).
+  // Một ca = giờ làm việc của cả ngày, gồm một hoặc nhiều buổi.
   const shiftData = [
     {
       code: 'CA_1', name: 'Ca 1',
-      morningStart: '07:00', morningEnd: '11:30',
-      afternoonStart: '14:00', afternoonEnd: '17:30',
+      sessions: [
+        { name: 'Buổi sáng', start: '07:00:00', end: '11:30:00' },
+        { name: 'Buổi chiều', start: '14:00:00', end: '17:30:00' },
+      ],
       graceMinutes: 5,
     },
     {
       code: 'CA_2', name: 'Ca 2',
-      morningStart: '07:30', morningEnd: '11:30',
-      afternoonStart: '13:00', afternoonEnd: '18:00',
+      sessions: [
+        { name: 'Buổi sáng', start: '07:30:00', end: '11:30:00' },
+        { name: 'Buổi chiều', start: '13:00:00', end: '18:00:00' },
+      ],
       graceMinutes: 5,
     },
   ];

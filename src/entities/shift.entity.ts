@@ -2,10 +2,17 @@ import {
   Entity, PrimaryGeneratedColumn, Column, CreateDateColumn,
 } from 'typeorm';
 
+/** Một buổi làm trong ca. Giờ dạng 'HH:mm:ss', `start` < `end`. */
+export interface ShiftSession {
+  name: string;
+  start: string;
+  end: string;
+}
+
 /**
- * Một ca làm việc = giờ làm của CẢ NGÀY: buổi sáng + buổi chiều.
- * Nghỉ trưa chính là khoảng trống giữa `morningEnd` và `afternoonStart`,
- * nên không cần khai báo riêng số phút nghỉ.
+ * Một ca làm việc = giờ làm của CẢ NGÀY, gồm một hoặc nhiều buổi
+ * (VD: sáng + chiều, hoặc chỉ một buổi tối 17:00-19:00 cho nhân viên bán thời gian).
+ * Khoảng nghỉ chính là chỗ trống giữa các buổi, nên không cần khai báo riêng.
  */
 @Entity({ name: 'shifts', schema: 'HRM' })
 export class Shift {
@@ -18,19 +25,9 @@ export class Shift {
   @Column({ length: 100 })
   name: string;
 
-  /** 'HH:mm:ss'. Null nếu ca không làm buổi sáng. */
-  @Column({ name: 'morning_start', type: 'time', nullable: true })
-  morningStart: string | null;
-
-  @Column({ name: 'morning_end', type: 'time', nullable: true })
-  morningEnd: string | null;
-
-  /** 'HH:mm:ss'. Null nếu ca không làm buổi chiều. */
-  @Column({ name: 'afternoon_start', type: 'time', nullable: true })
-  afternoonStart: string | null;
-
-  @Column({ name: 'afternoon_end', type: 'time', nullable: true })
-  afternoonEnd: string | null;
+  /** Các buổi làm, xếp theo giờ bắt đầu, không chồng lên nhau. */
+  @Column({ type: 'jsonb', default: () => "'[]'::jsonb" })
+  sessions: ShiftSession[];
 
   @Column({ name: 'grace_minutes', type: 'smallint', default: 5 })
   graceMinutes: number;
