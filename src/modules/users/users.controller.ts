@@ -31,6 +31,13 @@ export class UsersController {
     return this.usersService.findAll(role, status);
   }
 
+  /** Mã nhân viên kế tiếp, để điền sẵn vào form thêm nhân viên. Phải đứng trước ':id'. */
+  @Get('next-code')
+  @Roles(UserRole.GIAM_DOC)
+  async nextCode() {
+    return { code: await this.usersService.nextEmployeeCode() };
+  }
+
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() me: User) {
     if (me.role === UserRole.NHAN_VIEN && me.id !== id) {
@@ -76,7 +83,7 @@ export class UsersController {
     // Truoc day bat ky ai cung co the PATCH chinh minh voi { role: 'GIAM_DOC' } de
     // tu nang len Giam doc (jwt.strategy doc role tu DB nen co hieu luc ngay lap tuc).
     if (!isDirector) {
-      const privileged = ['role', 'status', 'departmentId', 'shiftId', 'managedDepartmentIds'] as const;
+      const privileged = ['role', 'status', 'departmentId', 'shiftId', 'managedDepartmentIds', 'employeeCode'] as const;
       const touched = privileged.filter((f) => dto[f] !== undefined);
       if (touched.length > 0) {
         throw new ForbiddenException('Không có quyền thay đổi: ' + touched.join(', '));

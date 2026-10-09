@@ -38,6 +38,8 @@ export class CreateUserDto {
 }
 
 export class UpdateUserDto {
+  @ApiPropertyOptional({ description: 'Mã nhân viên — chỉ Giám đốc được đổi' })
+  @IsOptional() @IsString() employeeCode?: string;
   @ApiPropertyOptional() @IsOptional() @IsString() fullName?: string;
   @ApiPropertyOptional({ description: 'null hoặc "" để xoá; phải còn email hoặc SĐT' })
   @ValidateIf(hasEmail) @IsEmail({}, { message: 'Email không hợp lệ' }) email?: string | null;
@@ -109,16 +111,31 @@ export class UsersService {
     return user.managedDepartments;
   }
 
-  private async generateEmployeeCode(): Promise<string> {
-    const last = await this.repo
+  /**
+   * Mã kế tiếp dạng NV001, NV002... Lấy số lớn nhất trong các mã đúng mẫu NV+số
+   * (so theo số, không theo chuỗi: NV1000 > NV999). Mã do người dùng tự đặt khác
+   * mẫu thì bỏ qua.
+   */
+  async nextEmployeeCode(): Promise<string> {
+    const row = await this.repo
       .createQueryBuilder('u')
-      .select('u.employeeCode', 'code')
-      .where("u.employeeCode LIKE 'NV%'")
-      .orderBy('u.employeeCode', 'DESC')
-      .limit(1)
+      .select(`MAX(CAST(substring(u.employee_code FROM 3) AS INTEGER))`, 'max')
+      .where(`u.employee_code ~ '^NV[0-9]{1,9}$'`)
       .getRawOne();
-    const nextNum = last ? (parseInt(last.code.replace('NV', ''), 10) || 0) + 1 : 1;
+    const nextNum = (Number(row?.max) || 0) + 1;
     return `NV${String(nextNum).padStart(3, '0')}`;
+  }
+
+  /** Mã nhân viên: bỏ khoảng trắng hai đầu, không rỗng, tối đa 20 ký tự, không trùng. */
+  private async checkEmployeeCode(code: string, exceptId?: string): Promise<string> {
+    const c = code.trim();
+    if (!c) throw new BadRequestException('Mã nhân viên không được để trống');
+    if (c.length > 20) throw new BadRequestException('Mã nhân viên tối đa 20 ký tự');
+    const others = exceptId ? { id: Not(exceptId) } : {};
+    if (await this.repo.exists({ where: { employeeCode: c, ...others } })) {
+      throw new ConflictException(`Mã nhân viên ${c} đã được dùng`);
+    }
+    return c;
   }
 
   /**
@@ -143,9 +160,9 @@ export class UsersService {
     const phone = normalizePhone(dto.phone);
     await this.checkLoginContacts(email, phone);
 
-    const employeeCode = dto.employeeCode || await this.generateEmployeeCode();
-    const codeExists = await this.repo.findOne({ where: { employeeCode } });
-    if (codeExists) throw new ConflictException('Mã nhân viên đã tồn tại');
+    const employeeCode = await this.checkEmployeeCode(
+      dto.employeeCode?.trim() || await this.nextEmployeeCode(),
+    );
 
     const user = this.repo.create({
       employeeCode,
@@ -169,7 +186,10 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException('Không tìm thấy nhân viên');
 
-    const { managedDepartmentIds, email, phone, ...rest } = dto;
+    const { managedDepartmentIds, email, phone, employeeCode, ...rest } = dto;
+    if (employeeCode !== undefined && employeeCode.trim() !== user.employeeCode) {
+      user.employeeCode = await this.checkEmployeeCode(employeeCode, user.id);
+    }
     // Bỏ field undefined (target ES2023 biến mọi field của DTO thành thuộc tính
     // thật), không thì gán đè làm mất giá trị cũ trong object trả về.
     Object.assign(user, Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)));
