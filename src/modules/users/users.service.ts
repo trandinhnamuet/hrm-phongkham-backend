@@ -2,12 +2,18 @@ import {
   Injectable, NotFoundException, ConflictException, ForbiddenException, BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
-import { IsArray, IsEmail, IsEnum, IsInt, IsOptional, IsString, MinLength } from 'class-validator';
+import { In, Not, Repository } from 'typeorm';
+import {
+  IsArray, IsEmail, IsEnum, IsInt, IsOptional, IsString, MinLength, ValidateIf,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { User, UserRole, UserStatus } from '../../entities/user.entity';
 import { Department } from '../../entities/department.entity';
+import { normalizeEmail, normalizePhone } from '../../common/utils/contact';
+
+/** Chỉ kiểm định dạng email khi có nhập — để trống là hợp lệ (đăng nhập bằng SĐT). */
+const hasEmail = (o: { email?: string | null }) => o.email !== undefined && o.email !== null && o.email !== '';
 
 export class SetManagedDepartmentsDto {
   @ApiPropertyOptional({ type: [Number] })
@@ -18,9 +24,11 @@ export class SetManagedDepartmentsDto {
 export class CreateUserDto {
   @ApiPropertyOptional() @IsOptional() @IsString() employeeCode?: string;
   @ApiProperty() @IsString() fullName: string;
-  @ApiProperty() @IsEmail() email: string;
+  @ApiPropertyOptional({ description: 'Email hoặc SĐT — cần ít nhất một để đăng nhập' })
+  @ValidateIf(hasEmail) @IsEmail({}, { message: 'Email không hợp lệ' }) email?: string | null;
   @ApiProperty() @IsString() @MinLength(6) password: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
+  @ApiPropertyOptional({ description: 'Email hoặc SĐT — cần ít nhất một để đăng nhập' })
+  @IsOptional() @IsString() phone?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsEnum(UserRole) role?: UserRole;
   @ApiPropertyOptional() @IsOptional() @IsString() positionTitle?: string;
   @ApiPropertyOptional() @IsOptional() joinDate?: string;
@@ -31,7 +39,10 @@ export class CreateUserDto {
 
 export class UpdateUserDto {
   @ApiPropertyOptional() @IsOptional() @IsString() fullName?: string;
-  @ApiPropertyOptional() @IsOptional() @IsString() phone?: string;
+  @ApiPropertyOptional({ description: 'null hoặc "" để xoá; phải còn email hoặc SĐT' })
+  @ValidateIf(hasEmail) @IsEmail({}, { message: 'Email không hợp lệ' }) email?: string | null;
+  @ApiPropertyOptional({ description: 'null hoặc "" để xoá; phải còn email hoặc SĐT' })
+  @IsOptional() @IsString() phone?: string | null;
   @ApiPropertyOptional() @IsOptional() @IsEnum(UserRole) role?: UserRole;
   @ApiPropertyOptional() @IsOptional() @IsString() positionTitle?: string;
   @ApiPropertyOptional() @IsOptional() @IsEnum(UserStatus) status?: UserStatus;
@@ -110,9 +121,27 @@ export class UsersService {
     return `NV${String(nextNum).padStart(3, '0')}`;
   }
 
+  /**
+   * Email và SĐT là tên đăng nhập: chuẩn hoá, bắt buộc có ít nhất một, và
+   * không trùng với tài khoản khác (kể cả tài khoản đã nghỉ việc).
+   */
+  private async checkLoginContacts(email: string | null, phone: string | null, exceptId?: string) {
+    if (!email && !phone) {
+      throw new BadRequestException('Cần nhập ít nhất email hoặc số điện thoại để đăng nhập');
+    }
+    const others = exceptId ? { id: Not(exceptId) } : {};
+    if (email && await this.repo.exists({ where: { email, ...others } })) {
+      throw new ConflictException('Email đã được dùng cho nhân viên khác');
+    }
+    if (phone && await this.repo.exists({ where: { phone, ...others } })) {
+      throw new ConflictException('Số điện thoại đã được dùng cho nhân viên khác');
+    }
+  }
+
   async create(dto: CreateUserDto) {
-    const emailExists = await this.repo.findOne({ where: { email: dto.email } });
-    if (emailExists) throw new ConflictException('Email đã tồn tại');
+    const email = normalizeEmail(dto.email);
+    const phone = normalizePhone(dto.phone);
+    await this.checkLoginContacts(email, phone);
 
     const employeeCode = dto.employeeCode || await this.generateEmployeeCode();
     const codeExists = await this.repo.findOne({ where: { employeeCode } });
@@ -121,9 +150,9 @@ export class UsersService {
     const user = this.repo.create({
       employeeCode,
       fullName: dto.fullName,
-      email: dto.email,
+      email,
       passwordHash: dto.password,
-      phone: dto.phone,
+      phone,
       role: dto.role || UserRole.NHAN_VIEN,
       positionTitle: dto.positionTitle,
       joinDate: dto.joinDate ? new Date(dto.joinDate) : undefined,
@@ -140,8 +169,16 @@ export class UsersService {
     });
     if (!user) throw new NotFoundException('Không tìm thấy nhân viên');
 
-    const { managedDepartmentIds, ...rest } = dto;
-    Object.assign(user, rest);
+    const { managedDepartmentIds, email, phone, ...rest } = dto;
+    // Bỏ field undefined (target ES2023 biến mọi field của DTO thành thuộc tính
+    // thật), không thì gán đè làm mất giá trị cũ trong object trả về.
+    Object.assign(user, Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)));
+
+    if (email !== undefined || phone !== undefined) {
+      if (email !== undefined) user.email = normalizeEmail(email);
+      if (phone !== undefined) user.phone = normalizePhone(phone);
+      await this.checkLoginContacts(user.email, user.phone, user.id);
+    }
 
     if (managedDepartmentIds !== undefined) {
       if (user.role === UserRole.QUAN_LY || dto.role === UserRole.QUAN_LY) {

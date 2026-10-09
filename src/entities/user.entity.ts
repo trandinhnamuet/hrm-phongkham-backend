@@ -29,11 +29,16 @@ export class User {
   @Column({ name: 'full_name', length: 150 })
   fullName: string;
 
-  @Column({ unique: true, length: 255 })
-  email: string;
+  /**
+   * Email và số điện thoại đều dùng để đăng nhập; chỉ cần có một trong hai
+   * (CHECK CHK_HRM_users_login). Cả hai đều unique, lưu ở dạng đã chuẩn hoá —
+   * xem common/utils/contact.ts.
+   */
+  @Column({ unique: true, nullable: true, type: 'varchar', length: 255 })
+  email: string | null;
 
-  @Column({ nullable: true, length: 20 })
-  phone: string;
+  @Column({ nullable: true, type: 'varchar', length: 20 })
+  phone: string | null;
 
   @Column({ name: 'password_hash', length: 255 })
   passwordHash: string;
