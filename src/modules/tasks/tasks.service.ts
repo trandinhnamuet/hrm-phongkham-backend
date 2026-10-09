@@ -11,7 +11,7 @@ import { Task, TaskPriority, TaskStatus, TaskReviewStatus } from '../../entities
 import { TaskHistory } from '../../entities/task-history.entity';
 import { TaskComment } from '../../entities/task-comment.entity';
 import { TaskAttachment } from '../../entities/task-attachment.entity';
-import { User, UserRole } from '../../entities/user.entity';
+import { User, UserRole, UserStatus } from '../../entities/user.entity';
 import { NotificationType } from '../../entities/notification.entity';
 import { NotificationsService } from '../notifications/notifications.service';
 
@@ -156,6 +156,15 @@ export class TasksService {
 
   /** Ai được giao việc cho ai. Giám đốc giao cho tất cả, quản lý giao trong bộ phận mình. */
   private async assertCanAssign(user: User, assignees: User[]): Promise<void> {
+    // Nhân viên đã nghỉ việc vẫn nằm trên các việc cũ (giữ lịch sử), nhưng không
+    // được giao thêm việc mới — kể cả Giám đốc giao.
+    const resigned = assignees.filter(a => a.status !== UserStatus.ACTIVE);
+    if (resigned.length > 0) {
+      throw new BadRequestException(
+        'Không thể giao việc cho nhân viên đã nghỉ: ' + resigned.map(r => r.fullName).join(', '),
+      );
+    }
+
     if (user.role === UserRole.GIAM_DOC) return;
 
     const others = assignees.filter(a => a.id !== user.id);
