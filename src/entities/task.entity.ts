@@ -66,6 +66,10 @@ export class Task {
   @Column({ type: 'enum', enum: TaskStatus, default: TaskStatus.TODO })
   status: TaskStatus;
 
+  /** "Từ ngày" — ngày bắt đầu, không bắt buộc. */
+  @Column({ name: 'start_date', nullable: true, type: 'date' })
+  startDate: Date | null;
+
   @Column({ name: 'due_date', nullable: true, type: 'date' })
   dueDate: Date;
 

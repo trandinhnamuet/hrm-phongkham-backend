@@ -23,6 +23,7 @@ export class TasksController {
   @ApiQuery({ name: 'status', required: false, enum: TaskStatus })
   @ApiQuery({ name: 'priority', required: false, enum: TaskPriority })
   @ApiQuery({ name: 'assigneeId', required: false })
+  @ApiQuery({ name: 'includeCancelled', required: false, description: 'true = hiện cả việc đã hủy' })
   findAll(
     @CurrentUser() user: User,
     // optional: true -> khong truyen thi bo qua, truyen sai thi 400 (truoc day la 500).
@@ -34,8 +35,11 @@ export class TasksController {
     priority?: TaskPriority,
     @Query('assigneeId', new ParseUUIDPipe({ optional: true }))
     assigneeId?: string,
+    @Query('includeCancelled') includeCancelled?: string,
   ) {
-    return this.tasksService.findAll(user, { status, priority, assigneeId });
+    return this.tasksService.findAll(user, {
+      status, priority, assigneeId, includeCancelled: includeCancelled === 'true',
+    });
   }
 
   @Get(':id')

@@ -4,7 +4,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository, IsNull } from 'typeorm';
 import {
-  IsArray, IsEnum, IsIn, IsOptional, IsString, IsUUID, IsDateString,
+  IsArray, IsEnum, IsIn, IsOptional, IsString, IsUUID, IsDateString, ValidateIf,
 } from 'class-validator';
 import { ApiPropertyOptional, ApiProperty } from '@nestjs/swagger';
 import { Task, TaskPriority, TaskStatus, TaskReviewStatus } from '../../entities/task.entity';
@@ -14,6 +14,10 @@ import { TaskAttachment } from '../../entities/task-attachment.entity';
 import { User, UserRole, UserStatus } from '../../entities/user.entity';
 import { NotificationType } from '../../entities/notification.entity';
 import { NotificationsService } from '../notifications/notifications.service';
+
+/** Ngày dạng 'YYYY-MM-DD'; null hoặc "" nghĩa là để trống / xoá ngày. */
+const hasDate = (field: 'startDate' | 'dueDate') =>
+  (o: Record<string, unknown>) => o[field] !== undefined && o[field] !== null && o[field] !== '';
 
 export class CreateTaskDto {
   @ApiProperty() @IsString() title: string;
@@ -29,7 +33,9 @@ export class CreateTaskDto {
   assigneeId?: string;
 
   @ApiPropertyOptional() @IsOptional() @IsEnum(TaskPriority) priority?: TaskPriority;
-  @ApiPropertyOptional() @IsOptional() @IsDateString() dueDate?: string;
+  @ApiPropertyOptional({ description: 'Từ ngày, YYYY-MM-DD' })
+  @ValidateIf(hasDate('startDate')) @IsDateString() startDate?: string | null;
+  @ApiPropertyOptional() @ValidateIf(hasDate('dueDate')) @IsDateString() dueDate?: string | null;
 }
 
 export class UpdateTaskDto {
@@ -47,7 +53,10 @@ export class UpdateTaskDto {
 
   @ApiPropertyOptional() @IsOptional() @IsEnum(TaskPriority) priority?: TaskPriority;
   @ApiPropertyOptional() @IsOptional() @IsEnum(TaskStatus) status?: TaskStatus;
-  @ApiPropertyOptional() @IsOptional() @IsDateString() dueDate?: string;
+  @ApiPropertyOptional({ description: 'Từ ngày, YYYY-MM-DD; null hoặc "" để xoá' })
+  @ValidateIf(hasDate('startDate')) @IsDateString() startDate?: string | null;
+  @ApiPropertyOptional({ description: 'null hoặc "" để xoá' })
+  @ValidateIf(hasDate('dueDate')) @IsDateString() dueDate?: string | null;
 }
 
 export class ReviewTaskDto {
@@ -227,6 +236,27 @@ export class TasksService {
     }
   }
 
+  /** 'YYYY-MM-DD' của cột date (TypeORM trả về chuỗi hoặc Date tuỳ driver). */
+  private dateStr(v?: Date | string | null): string {
+    if (!v) return '';
+    return typeof v === 'string' ? v.split('T')[0] : v.toISOString().split('T')[0];
+  }
+
+  private assertDateOrder(startDate: string, dueDate: string) {
+    if (startDate && dueDate && startDate > dueDate) {
+      throw new BadRequestException('"Từ ngày" phải trước hoặc bằng hạn hoàn thành');
+    }
+  }
+
+  /**
+   * Hủy / khôi phục công việc: người giao việc, hoặc Quản lý / Giám đốc có quyền
+   * sửa việc đó. Nhân viên không tự hủy việc người khác giao cho mình.
+   */
+  private assertCanCancel(task: Task, user: User) {
+    if (user.role !== UserRole.NHAN_VIEN || task.createdById === user.id) return;
+    throw new ForbiddenException('Chỉ người giao việc hoặc quản lý mới được hủy / khôi phục công việc');
+  }
+
   /** Nạp task kèm danh sách người được giao — cần cho mọi kiểm tra quyền. */
   private async findTaskOrFail(id: number): Promise<Task> {
     const task = await this.taskRepo.findOne({
@@ -239,7 +269,13 @@ export class TasksService {
 
   /* ── CRUD ── */
 
-  async findAll(user: User, filters: { status?: TaskStatus; assigneeId?: string; priority?: TaskPriority }) {
+  /**
+   * Việc đã hủy bị ẩn khỏi danh sách, trừ khi lọc đúng trạng thái CANCELLED
+   * hoặc truyền includeCancelled (để hiện ra mà khôi phục).
+   */
+  async findAll(user: User, filters: {
+    status?: TaskStatus; assigneeId?: string; priority?: TaskPriority; includeCancelled?: boolean;
+  }) {
     await this.taskRepo
       .createQueryBuilder()
       .update(Task)
@@ -283,6 +319,7 @@ export class TasksService {
     }
 
     if (filters.status)   qb.andWhere('t.status = :s',   { s: filters.status });
+    else if (!filters.includeCancelled) qb.andWhere('t.status <> :cancelled', { cancelled: TaskStatus.CANCELLED });
     if (filters.priority) qb.andWhere('t.priority = :p', { p: filters.priority });
     if (filters.assigneeId) {
       qb.andWhere(
@@ -318,6 +355,7 @@ export class TasksService {
     const ids = requested && requested.length > 0 ? requested : [user.id];
     const assignees = await this.loadAssignees(ids);
     await this.assertCanAssign(user, assignees);
+    this.assertDateOrder(dto.startDate || '', dto.dueDate || '');
 
     const task = await this.taskRepo.save(this.taskRepo.create({
       title: dto.title,
@@ -325,6 +363,7 @@ export class TasksService {
       createdById: user.id,
       assignees,
       priority: dto.priority || TaskPriority.NORMAL,
+      startDate: dto.startDate ? new Date(dto.startDate) : null,
       dueDate: dto.dueDate ? new Date(dto.dueDate) : undefined,
       statusChangedAt: new Date(),
     }));
@@ -357,9 +396,14 @@ export class TasksService {
       task.status === TaskStatus.QUA_HAN &&
       dto.status &&
       dto.status !== TaskStatus.DONE &&
-      dto.status !== TaskStatus.QUA_HAN
+      dto.status !== TaskStatus.QUA_HAN &&
+      dto.status !== TaskStatus.CANCELLED
     ) {
-      throw new BadRequestException('Công việc quá hạn chỉ có thể chuyển sang Hoàn thành');
+      throw new BadRequestException('Công việc quá hạn chỉ có thể chuyển sang Hoàn thành hoặc Đã hủy');
+    }
+    if (dto.status !== undefined && dto.status !== task.status
+      && (dto.status === TaskStatus.CANCELLED || task.status === TaskStatus.CANCELLED)) {
+      this.assertCanCancel(task, user);
     }
 
     // Chỉ kiểm tra quyền trên những người MỚI được thêm vào.
@@ -404,12 +448,16 @@ export class TasksService {
     if (dto.title       !== undefined && dto.title       !== task.title)       { track('title', task.title, dto.title);             task.title       = dto.title; }
     if (dto.description !== undefined && dto.description !== task.description) { track('description', task.description, dto.description); task.description = dto.description; }
     if (dto.priority    !== undefined && dto.priority    !== task.priority)    { track('priority', task.priority, dto.priority);    task.priority    = dto.priority; }
-    if (dto.dueDate !== undefined) {
-      const oldDate = task.dueDate ? new Date(task.dueDate).toISOString().split('T')[0] : '';
-      if (oldDate !== dto.dueDate) {
-        track('dueDate', oldDate, dto.dueDate);
-        task.dueDate = new Date(dto.dueDate);
-      }
+    const newStart = dto.startDate !== undefined ? (dto.startDate || '') : this.dateStr(task.startDate);
+    const newDue = dto.dueDate !== undefined ? (dto.dueDate || '') : this.dateStr(task.dueDate);
+    this.assertDateOrder(newStart, newDue);
+    if (dto.startDate !== undefined && newStart !== this.dateStr(task.startDate)) {
+      track('startDate', this.dateStr(task.startDate), newStart);
+      task.startDate = newStart ? new Date(newStart) : null;
+    }
+    if (dto.dueDate !== undefined && newDue !== this.dateStr(task.dueDate)) {
+      track('dueDate', this.dateStr(task.dueDate), newDue);
+      task.dueDate = newDue ? new Date(newDue) : (null as any);
     }
     let newlyAdded: User[] = [];
     if (newAssignees !== undefined) {
@@ -546,9 +594,12 @@ export class TasksService {
     });
   }
 
+  /** Xóa hẳn chỉ dành cho Giám đốc; những người khác chuyển việc sang Đã hủy. */
   async remove(id: number, user: User) {
+    if (user.role !== UserRole.GIAM_DOC) {
+      throw new ForbiddenException('Chỉ Giám đốc được xóa công việc. Hãy chuyển công việc sang Đã hủy.');
+    }
     const task = await this.findTaskOrFail(id);
-    await this.checkWriteAccess(task, user);
     task.deletedAt = new Date();
     await this.taskRepo.save(task);
     // Thông báo cũ vẫn trỏ tới công việc này; để nguyên thì bấm vào chỉ nhận
